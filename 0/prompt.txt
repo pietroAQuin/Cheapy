@@ -210,3 +210,11 @@ create another dictionary for the context window sizes based on that:
 ---
 
 change the method build_model_list: capabality and price score and tier should be initialized with 0 and the rest should take the values that we already have
+
+---
+
+fixed the errors
+
+---
+
+commit and push model llm and model list files
