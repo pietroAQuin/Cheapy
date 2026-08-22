@@ -12,3 +12,6 @@ __pycache__/
 # Local scratch
 .venv/
 venv/
+
+# Tokenizer vocab, fetched once (3.6 MB)
+.tokenizer_cache/
