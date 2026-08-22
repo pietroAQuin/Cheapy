@@ -1,0 +1,9 @@
+Explore and explain to me the Viktor toolset
+
+---
+
+Explain to me the structure of a single Trajectory, and what trajectories_v1_01.jsonl holds
+
+---
+
+WHat is the role of the draft submission tool?
