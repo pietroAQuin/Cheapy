@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M0MT1A28HEMKHBCCYY42Q307",
+  "session_id": "c16ae82f-847b-475f-a049-bd657ab6502e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-22T13:19:51.335008Z",
+  "branch": "llm-models",
+  "checkpoints_count": 11,
+  "save_step_count": 5,
+  "files_touched": [
+    "data_models/model_llm.py",
+    "pre_processing/model_list.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "08815a641fe4",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 123255,
+    "cache_read_tokens": 3979506,
+    "output_tokens": 48968,
+    "api_call_count": 51
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-22T13:19:51.269719Z",
+    "agent_lines": 119,
+    "agent_removed": 0,
+    "human_added": 30,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 149,
+    "total_lines_changed": 149,
+    "agent_percentage": 79.86577181208054,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 94,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".idea/.gitignore": 10
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 84,
+      "user_lines_removed": 0,
+      "agent_lines_added": 78,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 85,
+      "user_lines_removed": 0,
+      "agent_lines_added": 151,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        "pre_processing/model_list.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 100,
+      "user_lines_removed": 0,
+      "agent_lines_added": 151,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        "data_models/model_llm.py": 16
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 97,
+      "user_lines_removed": 0,
+      "agent_lines_added": 246,
+      "agent_lines_removed": 9,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        "data_models/model_llm.py": 12,
+        "pre_processing/model_list.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 84,
+      "user_lines_removed": 0,
+      "agent_lines_added": 288,
+      "agent_lines_removed": 4,
+      "user_added_per_file": {
+        ".claude/settings.json": 84
+      }
+    }
+  ]
+}
