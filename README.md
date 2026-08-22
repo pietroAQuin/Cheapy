@@ -64,14 +64,21 @@ Both live in `data_models/` as Pydantic `BaseModel`s. Keep them there and keep t
 validation at the boundary is what makes a half-finished pipeline debuggable. Import them; never
 redefine these shapes inline.
 
-- **`ModelLLM`** (`data_models/LLMModel.py`) — everything known about one model in the candidate
-  pool, including the scores the router stages attach to it.
+- **`ModelLLM`** (`data_models/model_llm.py`) — everything known about one model in the candidate
+  pool, including the scores the router stages attach to it. Current fields: `name`, `family`,
+  `performance_score`, `price_score`, `final_score` (all `None` until the matching stage in the
+  scoring chain above sets them — never treat an unset score as `0`), `context_window_size`, and
+  the four per-1M-token price fields (`input_price_per_1m`, `cached_input_price_per_1m`,
+  `output_price_per_1m`, `cached_output_price_per_1m`).
 - **`Trajectory`** (`data_models/Trajectory.py`) — everything known about one trajectory.
 
 ### The two pre-processing entry points
 
 - **`pre_processing/model_list.py`** — where `ModelLLM` objects are first created. Returns the
-  list of every model to be considered for routing a trajectory.
+  list of every model to be considered for routing a trajectory. Currently a static pool: the 9
+  ids/families observed in one scan of `data/trajectories_v1_01.jsonl`, paired with their real
+  published pricing and context-window figures — not derived by scanning the export on every
+  run. Revisit if a later chunk introduces new ids.
 - **`pre_processing/trajectory_analyzer.py`** — where `Trajectory` objects are first created.
   Takes a single trajectory as JSON lines and returns one `Trajectory`.
 
@@ -95,9 +102,9 @@ the same contract and a term in `model.py`'s average.
 
 | Path | Role | Status |
 |---|---|---|
-| `data_models/LLMModel.py` | `ModelLLM` — one candidate model | **empty stub** |
+| `data_models/model_llm.py` | `ModelLLM` — one candidate model | **implemented** |
 | `data_models/Trajectory.py` | `Trajectory` — one trajectory | **empty stub** |
-| `pre_processing/model_list.py` | Builds the candidate pool | **empty stub** |
+| `pre_processing/model_list.py` | Builds the candidate pool | **implemented** (static pool + real pricing; no scoring — that's `router_models/`'s job) |
 | `pre_processing/trajectory_analyzer.py` | Parses JSON lines into a `Trajectory` | **empty stub** |
 | `router_models/price_model.py` | Assigns `price_score` | **empty stub** |
 | `router_models/performance_model.py` | Assigns `performance_score` | **empty stub** |
@@ -105,9 +112,9 @@ the same contract and a term in `model.py`'s average.
 | `data/` | The redacted export (gitignored, challenge-use only) | present locally |
 | `code_agent_utils/` | Organizers' briefing + `/setup`, `/make-presentation`, `/prepare-submission` skills | supplied |
 
-Every Python file listed above is currently a **zero-byte placeholder**. The structure is
-decided; the implementations are not. Nothing imports anything yet — you are not breaking an
-existing contract, you are writing the first one.
+`data_models/model_llm.py` and `pre_processing/model_list.py` are implemented; every other Python
+file listed above is still a **zero-byte placeholder**. Nothing downstream imports the two
+implemented files yet — you are not breaking an existing contract, you are writing the first one.
 
 ---
 
@@ -264,11 +271,11 @@ Live list — resolve, then fold the answer into the sections above.
 
 1. Price scoring formula, and the assumed price sheet behind it.
 2. Performance scoring formula, and which observable proxies feed it.
-3. `ModelLLM` field set — beyond `price_score`, `performance_score`, and the final score.
-4. `Trajectory` field set — what `trajectory_analyzer.py` extracts and precomputes.
-5. Where the candidate pool comes from: hardcoded in `model_list.py`, or derived from the models
-   observed in the export.
-6. Routing granularity: the decision is framed as "the model for the next message", while the
+3. `Trajectory` field set — what `trajectory_analyzer.py` extracts and precomputes.
+4. Routing granularity: the decision is framed as "the model for the next message", while the
    dataset premise is one model per trajectory. Decide whether the router may switch
    mid-trajectory — and if so, the cache penalty is not optional.
-7. Default weights, and the sweep used to produce the frontier.
+5. Default weights, and the sweep used to produce the frontier.
+
+Resolved: `ModelLLM` field set (§2) and where the candidate pool comes from (§2,
+`pre_processing/model_list.py`).
