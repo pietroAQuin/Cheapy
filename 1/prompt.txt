@@ -1,0 +1,21 @@
+judge my cost score strategy
+
+---
+
+why do i need the min when calculating the cached tokens? cant I just make it to the cached tokens prvious set by the trajectory analyzer?
+
+---
+
+okay. but the calculations are correct?
+
+---
+
+does it make senseß
+
+---
+
+but every time you send a message you have to resend everything, so isnt that right?
+
+---
+
+okay. lets fix it
