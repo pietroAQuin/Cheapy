@@ -7,3 +7,7 @@ can you recover the dataset? then extract it
 ---
 
 lets start by editing the file LMMModel.py. there we want to define the class model. this class shoud be defined using pydantic and contain all informations about the models that we are going to need later to compare then. including cache_window_size; price for input, output, and price for cached input and output, and a tier thats a number. we are going to create a list of models later, keep that in mind. create the pydantic class in the file
+
+---
+
+I changed the name of the file. keep my changes and push it with the commit message "class for the llm models"
