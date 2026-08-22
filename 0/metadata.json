@@ -1,0 +1,117 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M0NSVKK5X0950VAFVK9082RQ",
+  "session_id": "f2f52d5c-8e84-4e25-ad92-8d33ed6743e0",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-22T22:36:05.1210058Z",
+  "branch": "base-quality-value",
+  "checkpoints_count": 4,
+  "save_step_count": 5,
+  "files_touched": [
+    "README.md",
+    "data_models/quality_base_value.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "21866958baf5",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 196,
+    "cache_creation_tokens": 520630,
+    "cache_read_tokens": 14663192,
+    "output_tokens": 110257,
+    "api_call_count": 98
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-22T22:36:04.9759549Z",
+    "agent_lines": 131,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 511,
+    "human_removed": 0,
+    "total_committed": 642,
+    "total_lines_changed": 642,
+    "agent_percentage": 20.404984423676012,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 142,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".idea/.gitignore": 5,
+        ".idea/agentic-hackathon.iml": 14,
+        ".idea/inspectionProfiles/Project_Default.xml": 13,
+        ".idea/inspectionProfiles/profiles_settings.xml": 6,
+        ".idea/misc.xml": 6,
+        ".idea/modules.xml": 8,
+        ".idea/vcs.xml": 6
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 142,
+      "user_lines_removed": 0,
+      "agent_lines_added": 635,
+      "agent_lines_removed": 494,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".idea/.gitignore": 5,
+        ".idea/agentic-hackathon.iml": 14,
+        ".idea/inspectionProfiles/Project_Default.xml": 13,
+        ".idea/inspectionProfiles/profiles_settings.xml": 6,
+        ".idea/misc.xml": 6,
+        ".idea/modules.xml": 8,
+        ".idea/vcs.xml": 6
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 142,
+      "user_lines_removed": 0,
+      "agent_lines_added": 642,
+      "agent_lines_removed": 494,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".idea/.gitignore": 5,
+        ".idea/agentic-hackathon.iml": 14,
+        ".idea/inspectionProfiles/Project_Default.xml": 13,
+        ".idea/inspectionProfiles/profiles_settings.xml": 6,
+        ".idea/misc.xml": 6,
+        ".idea/modules.xml": 8,
+        ".idea/vcs.xml": 6
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 142,
+      "user_lines_removed": 0,
+      "agent_lines_added": 642,
+      "agent_lines_removed": 494,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".idea/.gitignore": 5,
+        ".idea/agentic-hackathon.iml": 14,
+        ".idea/inspectionProfiles/Project_Default.xml": 13,
+        ".idea/inspectionProfiles/profiles_settings.xml": 6,
+        ".idea/misc.xml": 6,
+        ".idea/modules.xml": 8,
+        ".idea/vcs.xml": 6
+      }
+    }
+  ]
+}
