@@ -1,0 +1,68 @@
+We are going to create all "Trajectory" related files and scripts. Starting with the pydantic model. What attributes can you infer from the README.md for the Trajectory object?
+
+---
+
+Observed model and model_consistent can be dropped. Trajectory are always served by a single model. Explain what you mean by the surface and coding_dialect attributes: ain't toolsets equal across trajectories, since Viktor has always the same toolset available? Also explain what submit_draft does and mean within the Viktor toolset
+
+---
+
+One question, why do we need to reconstruct the chats? Ain't each line of the JSON a single Trajectory to be predicted
+
+---
+
+But why would you need to reconstruct a trajectory from the system prompt if withing a JSONL file, every line is a Trajectory? No need to reconstruct, just parse the file line by line
+
+---
+
+Lets start with the creation of the pyadntic data class, use this template, every other attribute fals: id
+
+served_model
+is_subagent
+viktor_environment (Teams or Slack)
+toolset (List of ENUMS)
+toolset_size 
+
+avg_tools_per_call
+avg_output_tokens_per_call
+avg_input_tokens_per_call
+
+total_calls
+total_tokens
+total_cached_tokens
+total_tool_calls
+total_custom_tool_calls
+total_ai_messages
+total_user_messages
+total_draft_submit_calls
+
+---
+
+Now create the trajectory_analyzer that fills these fields. It receives a single json line and returns a trajectory object
+
+---
+
+Now create the trajectory_analyzer that fills these fields. It receives a single json line and returns a trajectory object. Before writing any code, provide a report for how you pretend to populate each line.
+
+---
+
+Ok some points: i) Liked the way fields are getting populated, and loved the cache definition based on a CACHE_HIT_RATE customizable variable. ii) Replace custom_tool_calls by total_images_uploaded and add avg_images_per_call. iii) regarding token estimation, explore options within the LangChain universe for counting tokens within a context window with a tokenizer specified. We can use LangChain to convert all of our trajectories into a common representation, and then use its tools for counting tokens with a real tokenizer. Explore that possibility.
+
+---
+
+Ok, on points presented: i) Use tiktoken ii) Lets split the image fields: total_images_generated, total_images_received, avg_images_generated_per_call, avg_images_received_per_call
+
+---
+
+On image generation I mean images sent by Viktor, use the tooling for evaluating that
+
+---
+
+drop images_generated, lets just use the images_received sphere
+
+---
+
+Add an attribute to the Trajectory that holds the normalized trajectory, that means in the common gpt and anthropic representation. That info should be recoverable in case cost_model decides to infer any other data from the raw trajectory.
+
+---
+
+Yes, update the README. Don't commit yet
