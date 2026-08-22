@@ -1,0 +1,53 @@
+judge my cost score strategy
+
+---
+
+why do i need the min when calculating the cached tokens? cant I just make it to the cached tokens prvious set by the trajectory analyzer?
+
+---
+
+okay. but the calculations are correct?
+
+---
+
+does it make senseß
+
+---
+
+but every time you send a message you have to resend everything, so isnt that right?
+
+---
+
+okay. lets fix it
+
+---
+
+commit and push
+
+---
+
+now lets fix the following thing. if the context is bigger than the context window of a model we assume the the context was compacted to the models maximum capacity, so that we dont have to ignore these models.
+
+---
+
+we should never return none. so for example, if the context window ever gets bigger than the maximum context window for the model we just clamp it, because we assume that this window will be compressed to its maximum sozs
+
+---
+
+dont set its model price to 1. think. its the same formula, but when the context gets bigger than the maximum accepted clamp it to the maximum
+
+---
+
+try again
+
+---
+
+what do you mean by if spread == 0? when is that the case?
+
+---
+
+okay so keep it and end your changes
+
+---
+
+update the readme also
