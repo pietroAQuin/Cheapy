@@ -1,0 +1,1 @@
+We are building a LLM-Router for Viktor, a LLM-Agent that serves as a coworker on Slack and Teams. This is a Hachkaton project, and you are responsible for writing the core README.md file that future agents working on the codebase will read. Our routing system is explained under routing_scheme.md. Based of this file, generate this starting documentation.
