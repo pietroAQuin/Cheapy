@@ -116,6 +116,7 @@ the same contract and a term in `model.py`'s average.
 | `router_models/model.py` | Weighted aggregation, ranking, HOLD/CHANGE decision | **empty stub** |
 | `data/` | The redacted export (gitignored, challenge-use only) | present locally |
 | `code_agent_utils/` | Organizers' briefing + `/setup`, `/make-presentation`, `/prepare-submission` skills | supplied |
+| `tests/` | Unit tests for the implemented modules, against hand-built fixtures (not the export) | covers `data_models/`, `pre_processing/` |
 
 `data_models/model_llm.py`, `data_models/Trajectory.py`, `pre_processing/model_list.py`, and
 `pre_processing/trajectory_analyzer.py` are implemented and cross-checked against the export —
@@ -123,6 +124,10 @@ treat their contracts as real. Every file under `router_models/` is still a **ze
 placeholder**: the structure is decided, those implementations are not. Nothing yet wires the
 implemented pre-processing stage into a scoring stage — you are not breaking an existing
 contract, you are writing the first one.
+
+Run the suite with `pip install -r requirements-dev.txt && python -m pytest`. Tests build their
+own synthetic trajectory lines (both encodings) in `tests/conftest.py` rather than reading
+`data/`, since the real export is gitignored and not guaranteed to be present.
 
 ---
 
