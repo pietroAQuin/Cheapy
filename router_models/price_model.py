@@ -47,15 +47,19 @@ def _next_call_tokens(trajectory: Trajectory) -> tuple[float, float, float]:
 
     `increment_tokens` approximates how much *new* content (tool outputs, replies, ...)
     a typical call in this trajectory appends, as the trajectory's own average per-call
-    growth (`total_tokens / total_calls`). There is no better signal available: the next
-    call's actual new content is by definition not in the log yet. This average is a
-    separate, smaller known simplification (it can over- or under-estimate a single
-    step depending on whether the trajectory's growth is front- or back-loaded) --
-    see the README's "Known simplifications".
+    growth (`last_call_input_tokens / total_calls`) -- not `total_tokens / total_calls`,
+    which is the same superseded-snapshots mistake `last_call_input_tokens` exists to
+    avoid, just applied to the increment instead of the prompt size: it averages in
+    every past call's own (smaller, since-outgrown) prompt size, not how much this
+    trajectory actually grows per step. There is no better signal available for the
+    increment itself: the next call's actual new content is by definition not in the
+    log yet. This average is a separate, smaller known simplification (it can over- or
+    under-estimate a single step depending on whether the trajectory's growth is
+    front- or back-loaded) -- see the README's "Known simplifications".
     """
     last_call_input_tokens = float(trajectory.last_call_input_tokens)
     increment_tokens = (
-        float(trajectory.total_tokens) / trajectory.total_calls if trajectory.total_calls else 0.0
+        last_call_input_tokens / trajectory.total_calls if trajectory.total_calls else 0.0
     )
     next_output_tokens = trajectory.avg_output_tokens_per_call
     return last_call_input_tokens, increment_tokens, next_output_tokens

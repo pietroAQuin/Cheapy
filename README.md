@@ -343,11 +343,17 @@ contract above carves out.
      `total_tokens`-based formula, where it was effectively vacuous — `total_cached_tokens` is
      always `≤ total_tokens` by construction. Against `last_call_input_tokens` the cap is now the
      binding, meaningful constraint in the common case.)
-   - `increment_tokens = total_tokens / total_calls` — an ESTIMATE of how much *new* content (tool
-     outputs, replies, ...) a typical call in this trajectory appends, taken as the trajectory's
-     own average per-call growth. The next call's actual new content is by definition not yet in
-     the log, so this is the best available stand-in; it's a smaller, separate known
-     simplification from the `last_call_input_tokens` fix above — see "Known simplifications".
+   - `increment_tokens = last_call_input_tokens / total_calls` — an ESTIMATE of how much *new*
+     content (tool outputs, replies, ...) a typical call in this trajectory appends, taken as the
+     trajectory's own average per-call growth. **Not `total_tokens / total_calls`** — that repeats
+     the same superseded-snapshots mistake `last_call_input_tokens` exists to fix, just applied to
+     the increment instead of the base: it averages in every past call's own (smaller) prompt size
+     rather than measuring how much this trajectory actually grows per step, and settles around
+     roughly half of `last_call_input_tokens` regardless of trajectory length instead of shrinking
+     as trajectories get longer. The next call's actual new content is by definition not yet in the
+     log, so dividing `last_call_input_tokens` by `total_calls` is the best available stand-in; it's
+     a smaller, separate known simplification from the `last_call_input_tokens` fix above — see
+     "Known simplifications".
    - `next_output_tokens = avg_output_tokens_per_call` (already excludes the trajectory's
      unobserved final output, per `Trajectory`'s own field contract).
 2. **Feasibility gate.** If `next_input_tokens + next_output_tokens` (where
@@ -383,8 +389,8 @@ verified against synthetic trajectories only, not yet against the real export (n
 available locally when this was written — see §3).
 
 **Known simplifications, stated rather than hidden:**
-- `increment_tokens` is a same-trajectory average (`total_tokens / total_calls`), not a real
-  prediction of the next call's size; a trajectory with unusually front-loaded or back-loaded
+- `increment_tokens` is a same-trajectory average (`last_call_input_tokens / total_calls`), not a
+  real prediction of the next call's size; a trajectory with unusually front-loaded or back-loaded
   growth will be mis-estimated. Unlike the old `accumulated_context_tokens` bug, this is a
   bounded, secondary error — it only affects the *increment* term, not the whole next-call base.
 - The formula scores one hypothetical next call, not the rest of the trajectory to come — it

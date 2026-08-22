@@ -64,10 +64,10 @@ class TestNextCallCost(unittest.TestCase):
     """Exercises `_next_call_cost` directly so the arithmetic is pinned exactly."""
 
     def test_partial_cache_hold_splits_context_correctly(self):
-        # last_call_input_tokens=3,000, total_cached_tokens=1,800, total_tokens=10,000,
-        # total_calls=5 -> increment=2,000. HOLD should bill 1,800 at the cached rate and
-        # (3,000-1,800)+2,000=3,200 at the normal rate -- based on the size of the last
-        # actual call, not the trajectory's cumulative total_tokens.
+        # last_call_input_tokens=3,000, total_calls=5 -> increment=3,000/5=600, based on
+        # last_call_input_tokens (not total_tokens/total_calls). HOLD should bill 1,800 at
+        # the cached rate and (3,000-1,800)+600=1,800 at the normal rate -- based on the
+        # size of the last actual call, not the trajectory's cumulative total_tokens.
         trajectory = make_trajectory(
             served_model="model-a",
             total_tokens=10_000,
@@ -79,7 +79,7 @@ class TestNextCallCost(unittest.TestCase):
 
         cost = _next_call_cost(trajectory, model)
 
-        expected = (3_200 * 2.0 + 1_800 * 0.2) / 1_000_000
+        expected = (1_800 * 2.0 + 1_800 * 0.2) / 1_000_000
         self.assertAlmostEqual(cost, expected)
 
     def test_cached_tokens_capped_at_last_call_size_not_cumulative_total(self):
@@ -97,9 +97,10 @@ class TestNextCallCost(unittest.TestCase):
 
         cost = _next_call_cost(trajectory, model)
 
-        # increment = 100,000 / 10 = 10,000; cached is capped at 8,000, so the whole
-        # last call is treated as cached and only the increment is uncached.
-        expected = (10_000 * 2.0 + 8_000 * 0.2) / 1_000_000
+        # increment = last_call_input_tokens / total_calls = 8,000 / 10 = 800; cached is
+        # capped at 8,000, so the whole last call is treated as cached and only the
+        # increment is uncached.
+        expected = (800 * 2.0 + 8_000 * 0.2) / 1_000_000
         self.assertAlmostEqual(cost, expected)
 
     def test_no_cache_hold_equals_switch_cost_for_the_same_model(self):
@@ -132,9 +133,9 @@ class TestNextCallCost(unittest.TestCase):
 
         cost = _next_call_cost(trajectory, switch_model)
 
-        # next_input_tokens = last_call_input_tokens(3,000) + increment(2,000) = 5,000,
-        # all at the normal rate -- total_cached_tokens is irrelevant to a switch.
-        expected = (5_000 * 2.0) / 1_000_000
+        # next_input_tokens = last_call_input_tokens(3,000) + increment(3,000/5=600) =
+        # 3,600, all at the normal rate -- total_cached_tokens is irrelevant to a switch.
+        expected = (3_600 * 2.0) / 1_000_000
         self.assertAlmostEqual(cost, expected)
 
     def test_cache_makes_holding_cheaper_than_an_equally_priced_switch(self):
