@@ -16,12 +16,6 @@ class ModelLLM(BaseModel):
         description="0-1, higher = more capable. See pre_processing/model_list.py "
         "for how this is currently seeded — a naming-tier prior, not a measurement."
     )
-    capability_provenance: str = Field(
-        default="assumed",
-        description="'assumed' while capability_score is a naming-tier prior; "
-        "flip to 'empirical' once a later pass (judge-model scoring or "
-        "revealed-preference analysis of the traces) replaces it with a measured value.",
-    )
 
     price_score: float | None = Field(
         default=None,
@@ -31,8 +25,8 @@ class ModelLLM(BaseModel):
     )
     tier: int = Field(description="Relative capability/cost tier within its family; lower = cheaper/smaller.")
 
-    cache_window_size: int = Field(
-        description="Max number of tokens that can be served from cache (e.g. context window eligible for prompt caching).")
+    context_window_size: int = Field(
+        description="Max number of tokens (input + output) the model can hold in a single request.")
 
     input_price_per_1m: float = Field(description="USD per 1M uncached input tokens.")
 
