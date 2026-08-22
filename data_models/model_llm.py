@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class ModelLLM(BaseModel):
     """One scored entry per anonymized model id seen in the export.
 
-    Capability and price are kept as two separate scores rather than one
+    Performance and price are kept as two separate scores rather than one
     blended number, so the router can trade them off explicitly instead of
     ranking models on a single opaque figure.
     """
@@ -12,9 +12,11 @@ class ModelLLM(BaseModel):
     name: str  # anonymized model id as logged in the export, e.g. "claude-opus-5"
     family: str  # shared prefix across generations, e.g. "claude-opus"
 
-    capability_score: float = Field(
-        description="0-1, higher = more capable. See pre_processing/model_list.py "
-        "for how this is currently seeded — a naming-tier prior, not a measurement."
+    performance_score: float | None = Field(
+        default=None,
+        description="0-1, higher = more capable. Set by router_models/performance_model.py "
+        "as a function of (Trajectory, ModelLLM) — None means 'not scored yet for this "
+        "trajectory', not 'worst possible'; don't treat it as 0 in any trade-off math.",
     )
 
     price_score: float | None = Field(
@@ -23,7 +25,13 @@ class ModelLLM(BaseModel):
         "isn't wired up yet (router_models/price_model.py). None means 'not "
         "computed yet', not 'free' — don't treat it as 0 in any trade-off math.",
     )
-    tier: int = Field(description="Relative capability/cost tier within its family; lower = cheaper/smaller.")
+
+    final_score: float | None = Field(
+        default=None,
+        description="Weighted combination w_price·price_score + w_perf·performance_score, "
+        "set by router_models/model.py once both inputs exist (see README §5). None until "
+        "that stage runs — never fall back to 0.",
+    )
 
     context_window_size: int = Field(
         description="Max number of tokens (input + output) the model can hold in a single request.")

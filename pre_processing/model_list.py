@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Build the scored list of models the router chooses between.
+"""Build the candidate pool of models the router chooses between.
 
-price_score is intentionally left out: real cache-aware pricing lives in
-router_models/price_model.py, which isn't implemented yet. Every ModelLLM
-here comes back with price_score at its None default (see data_models/model_llm.py) —
-a later pass fills it in, this module doesn't guess at it.
-
-capability_score also isn't a measurement — there is no ground truth for
-anonymized model ids. It's seeded from a naming-tier prior (mirrors the
-assumption already used in the old baseline router: opus > sonnet > fable;
-gpt-5.6 variants have no published order, so they share one tier) and is
-marked "assumed" via capability_provenance until judge-model scoring or
-revealed-preference analysis (recovered outputs / trace complexity, see
-AGENTS.md's "earlier outputs are recoverable" note) replaces it.
+Per the README's architecture, this module only builds ModelLLM objects — it
+does not score them. performance_score and price_score are both left at their
+None default: those fields are set later by router_models/performance_model.py
+and router_models/price_model.py, respectively, as functions of
+(Trajectory, ModelLLM), not by the pool-builder.
 
 The (name -> family) map below was captured from one scan of the only export
 chunk available so far (9 ids, 4 families). It's static rather than scanned
@@ -33,8 +26,6 @@ _MODEL_FAMILIES: dict[str, str] = {
     "gpt-5.6-terra": "gpt-5.6",
     "gpt-5.6-luna": "gpt-5.6",
 }
-
-
 
 
 # Real published per-1M-token rates for the 9 ids above, keyed by field name on
@@ -99,31 +90,17 @@ def context_window_for(name: str) -> int:
 
 
 def build_model_list() -> list[ModelLLM]:
-    """Return one ModelLLM per known model id. capability_score, price_score, and tier
-    are left at 0 (not yet seeded); context window and per-1M-token prices are filled
-    in from the published values captured above."""
+    """Return one ModelLLM per known model id. performance_score and price_score
+    are both left at their None default (not yet seeded — see
+    router_models/performance_model.py and router_models/price_model.py);
+    context window and per-1M-token prices are filled in from the published
+    values captured above."""
     return [
         ModelLLM(
             name=name,
             family=family,
-            capability_score=0.0,
-            price_score=0.0,
-            tier=0,
             context_window_size=context_window_for(name),
             **price_for(name),
         )
         for name, family in _MODEL_FAMILIES.items()
     ]
-
-
-def main() -> None:
-    for model in build_model_list():
-        print(
-            f"{model.name:<20} family={model.family:<14} "
-            f"capability={model.capability_score:.2f} ({model.capability_provenance})  "
-            f"price=placeholder"
-        )
-
-
-if __name__ == "__main__":
-    main()
