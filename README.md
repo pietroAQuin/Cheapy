@@ -34,7 +34,7 @@ of committing to a single operating point.
 ## 2. Architecture
 
 ```
-                data/*.jsonl (one JSON line = one LLM request)
+            data/*.jsonl (one JSON line = one complete trajectory)
                                  │
         ┌────────────────────────┴────────────────────────┐
         │                pre_processing/                  │
@@ -70,7 +70,10 @@ redefine these shapes inline.
   scoring chain above sets them — never treat an unset score as `0`), `context_window_size`, and
   the four per-1M-token price fields (`input_price_per_1m`, `cached_input_price_per_1m`,
   `output_price_per_1m`, `cached_output_price_per_1m`).
-- **`Trajectory`** (`data_models/Trajectory.py`) — everything known about one trajectory.
+- **`Trajectory`** (`data_models/Trajectory.py`) — everything known about one trajectory: 19
+  fields covering identity, toolset, per-call averages, and totals, plus `normalized_items`,
+  the whole trajectory in an encoding-independent form (`NormalizedItem`, `ItemKind`) so a later
+  stage can derive signals this field set does not precompute.
 
 ### The two pre-processing entry points
 
@@ -80,7 +83,9 @@ redefine these shapes inline.
   published pricing and context-window figures — not derived by scanning the export on every
   run. Revisit if a later chunk introduces new ids.
 - **`pre_processing/trajectory_analyzer.py`** — where `Trajectory` objects are first created.
-  Takes a single trajectory as JSON lines and returns one `Trajectory`.
+  `analyze(line, id)` takes one JSON line and returns one `Trajectory`; `analyze_file(path)`
+  yields one per line. `normalize()` is the only function in the pipeline aware that the export
+  ships two encodings — everything downstream reads `NormalizedItem`.
 
 ### The scoring chain
 
@@ -103,18 +108,21 @@ the same contract and a term in `model.py`'s average.
 | Path | Role | Status |
 |---|---|---|
 | `data_models/model_llm.py` | `ModelLLM` — one candidate model | **implemented** |
-| `data_models/Trajectory.py` | `Trajectory` — one trajectory | **empty stub** |
+| `data_models/Trajectory.py` | `Trajectory` — one trajectory, plus `NormalizedItem` | **implemented** |
 | `pre_processing/model_list.py` | Builds the candidate pool | **implemented** (static pool + real pricing; no scoring — that's `router_models/`'s job) |
-| `pre_processing/trajectory_analyzer.py` | Parses JSON lines into a `Trajectory` | **empty stub** |
+| `pre_processing/trajectory_analyzer.py` | Parses one JSON line into a `Trajectory` | **implemented** |
 | `router_models/price_model.py` | Assigns `price_score` | **empty stub** |
 | `router_models/performance_model.py` | Assigns `performance_score` | **empty stub** |
 | `router_models/model.py` | Weighted aggregation, ranking, HOLD/CHANGE decision | **empty stub** |
 | `data/` | The redacted export (gitignored, challenge-use only) | present locally |
 | `code_agent_utils/` | Organizers' briefing + `/setup`, `/make-presentation`, `/prepare-submission` skills | supplied |
 
-`data_models/model_llm.py` and `pre_processing/model_list.py` are implemented; every other Python
-file listed above is still a **zero-byte placeholder**. Nothing downstream imports the two
-implemented files yet — you are not breaking an existing contract, you are writing the first one.
+`data_models/model_llm.py`, `data_models/Trajectory.py`, `pre_processing/model_list.py`, and
+`pre_processing/trajectory_analyzer.py` are implemented and cross-checked against the export —
+treat their contracts as real. Every file under `router_models/` is still a **zero-byte
+placeholder**: the structure is decided, those implementations are not. Nothing yet wires the
+implemented pre-processing stage into a scoring stage — you are not breaking an existing
+contract, you are writing the first one.
 
 ---
 
@@ -127,8 +135,9 @@ OpenAI-compatible Responses format. Exactly three top-level fields:
 - **`input`** — the full request history up to that call.
 - **`tools`** — the function definitions available to that call.
 
-There is **no `output` and no `usage`**. No token counts, no latency, no quality labels, no
-trajectory ids.
+There is **no `output` field and no `usage`**. No token counts, no latency, no quality labels,
+no trajectory ids. The final assistant message is nonetheless present *inside* `input` — see
+"Trajectory structure" below.
 
 ### What is actually in this chunk (measured, not assumed)
 
@@ -147,11 +156,26 @@ Model distribution across the 1,000 requests:
 | `claude-sonnet-4-6` | 1 |
 
 Input item types: `function_call` (10,123), `function_call_output` (10,123), `message` (8,583 —
-5,602 assistant / 1,981 user / 1,000 system), `reasoning` (1,792, gpt-family only, summaries
-empty), `custom_tool_call` + `custom_tool_call_output` (299 each, e.g. `apply_patch`).
+5,602 assistant / 1,981 user / 1,000 system), `reasoning` (1,792, gpt-family only — **1,011 of
+them carry summary text**, median 453 chars; the earlier claim that summaries are empty was
+wrong), `custom_tool_call` + `custom_tool_call_output` (299 each, e.g. `apply_patch`).
 
-(These counts are summed over requests, and each request re-sends the whole prior history, so
-they over-count long trajectories — read them as proportions, not as totals.)
+Every line is a distinct trajectory, so these are totals over the whole export, not
+over-counts.
+
+### Two encodings, and they give the model family away
+
+The export ships the same information in two shapes:
+
+| Encoding | Shape | Lines |
+|---|---|---|
+| typed / list | `{"type": "message", "role": …, "content": [{"type": "input_text", "text": …}]}` | 755 — **all `claude-*`** |
+| untyped / string | `{"role": …, "content": "…"}`, no `type` key | 245 — **all `gpt-*`** |
+
+772 items carry no `type` field at all. A parser that only understands the typed form returns
+**zero tokens for every GPT line** — a silent under-count perfectly correlated with model
+family. `trajectory_analyzer.normalize()` is the single place that resolves this; everything
+downstream reads `NormalizedItem` and never sees the difference.
 
 **This workload is overwhelmingly tool-calling, not chat:** roughly 1.2 `function_call` items
 for every message item, and 5,602 of the 8,583 messages are assistant turns. Any performance
@@ -161,8 +185,17 @@ Toolsets cluster into recognizable Viktor surfaces — a Slack-flavored set
 (`coworker_send_slack_message`, `coworker_upload_to_slack`, …, 929 requests), a Teams-flavored
 set (`coworker_*_msteams_*`, 71 requests), and two coding dialects: `bash`/`file_read`/
 `file_edit`/`file_write` (755) versus `shell_command`/`apply_patch` (245). Tool count per
-request is bimodal at 12 (692) and 10 (224). **The toolset is a strong, free signal about what
-kind of task a trajectory is** — use it.
+request is bimodal at 12 (692) and 10 (224). Only two tools — `submit_draft` and `view_image` —
+appear in every single request; there are 8 distinct toolsets in all.
+
+**The platform half of that signal is free and safe to use.** Slack vs Teams is independent of
+the served model (~7% Teams within both families), and is what `Trajectory.viktor_environment`
+carries.
+
+**The coding-dialect half is not a task signal at all — it is the model family restated.**
+`bash`/`file_*` occurs on 755 lines, every one of them `claude-*`; `shell_command`/`apply_patch`
+on 245, every one `gpt-*`. 100% separation. It is a provider harness artifact, so a score that
+reads it is reading `served_model` by proxy. See "Leakage" below.
 
 ### Redaction
 
@@ -170,20 +203,53 @@ Entities are replaced by stable named placeholders (`PII_PERSON_7`, `PII_COMPANY
 `PII_URL_8`, `<ID_13>`), consistent *within* a trajectory so references still resolve. Images
 are placeholder data URLs. Do not try to de-anonymize anything.
 
-### Reconstructing trajectories
+### Trajectory structure
 
-The export has no trajectory ids. Requests must be grouped by their **opening messages** (same
-system prompt + same first user text) and ordered by **input length** — each call's input
-contains every item of the call before it. This is what `trajectory_analyzer.py` is for.
+**No reconstruction is needed. One line is one complete trajectory.** An earlier version of this
+spec called for grouping requests by their opening messages and ordering them by input length;
+that was wrong for this chunk, and the procedure is a no-op here. Measured three ways:
+
+- grouping by (system prompt + first user text) yields **1,000 groups of size 1**;
+- testing whether any line's item list is a strict **prefix** of another's finds **0 pairs**;
+- repeating that test with redaction normalized away (structure-only item signatures, so
+  reassigned `PII_*` numbering cannot hide a match) still finds **0 pairs**.
+
+871 distinct system prompts across 1,000 lines, so some lines share a workspace — none continues
+another. The export was subsampled to one request per trajectory. Parse it with
+`for line in file`.
+
+The per-call structure lives *inside* each line instead. Segmenting `input` into maximal runs of
+model-generated items recovers the call sequence: **10,845 calls across the export**, median 5
+per trajectory, max 151. This is what `Trajectory.total_calls` and the `avg_*_per_call` fields
+are computed over, and what `NormalizedItem.call_index` stamps.
 
 Two consequences worth internalizing:
 
-1. **Earlier model outputs are recoverable.** What the model returned on call *i* shows up
-   inside call *i+1*'s input as assistant / `function_call` items. Only the *final* call's
-   output is genuinely lost. That is where most of the available quality signal lives.
-2. **One model serves all calls of a trajectory** — that is the premise, and the variation
-   *across* trajectories is the natural experiment the whole evaluation rests on. The analyzer
-   should flag any violation rather than silently averaging over it.
+1. **Every call's output is recoverable, including the last.** What the model returned on call
+   *i* appears in the history as assistant / `function_call` items, and every line ends with the
+   trajectory's closing assistant message. The catch is that this closing message is **empty on
+   97.1% of `gpt-*` lines (238 of 245) and on 0% of `claude-*` lines**. So the final response
+   text is a real quality signal for one family and absent for the other — using it raw is a
+   family-biased score, not a quality score.
+2. **One model serves all calls of a trajectory.** Each line carries exactly one `model`, so
+   within this export the premise is not observable and needs no policing. The variation *across*
+   trajectories is still the natural experiment the evaluation rests on.
+
+### Leakage — five ways to accidentally read `served_model`
+
+The scoring contract in §5 forbids reading the trajectory's `model`. These five features are that
+field in disguise, each verified at or near 100% separation on the export:
+
+| Feature | Separation |
+|---|---|
+| coding dialect: `bash`/`file_*` vs `shell_command`/`apply_patch` | 755 claude / 245 gpt, exact |
+| item encoding: typed-list vs untyped-string | 755 claude / 245 gpt, exact |
+| `custom_tool_call` present (`apply_patch`) | gpt only |
+| final assistant message empty | 97.1% gpt / 0% claude |
+| `reasoning` items present | gpt only |
+
+`NormalizedItem` deliberately keeps all of this reachable — it is raw material a later stage may
+need. Reaching for it in a *score* is the mistake.
 
 ---
 
@@ -206,25 +272,60 @@ Two consequences worth internalizing:
 
 ### Price
 
-- **Token counts are estimates.** There is no `usage` field. The convention here is chars/4
-  unless someone wires in a real tokenizer. Every number derived from them is an estimate and
-  must be labeled as one in the writeup. Never present estimated tokens as measured.
+- **Token counts are estimates.** There is no `usage` field. The pipeline counts with
+  **`tiktoken`, `o200k_base`, applied uniformly to every line of both families**
+  (`trajectory_analyzer.count_tokens`); chars/4 remains only as a fallback when the vocab file is
+  absent, so a machine with no network degrades instead of failing. Every number derived from
+  either is an estimate and must be labeled as one in the writeup. Never present estimated tokens
+  as measured.
+  - *Why not chars/4:* measured against the real tokenizer on this export, chars/4 understates
+    Claude text by 4% and GPT text by 9% — a 5-point **family-correlated** error, because
+    tool-call JSON tokenizes at ~3.2 chars/token against ~4.15 for prose and the GPT lines are
+    more tool-heavy. On a workload this tool-dominated it is wrong exactly where it matters.
+  - *Why one tokenizer for both:* the ids are anonymized and map to no public tokenizer
+    (`encoding_for_model("claude-opus-5")` raises), and Claude's tokenizer is not available
+    offline. A per-family tokenizer would make the two families' prices incomparable — which is
+    the only comparison the router makes. Uniform is the honest choice; it is still an estimate.
+  - Cost: ~16 s for the full export, offline after a one-time 3.6 MB vocab fetch cached in
+    `.tokenizer_cache/` (gitignored).
+- **Tool schemas count.** All ~12 schemas are re-sent on every call — a median **4,203** est.
+  tokens, and they sit at the very front of the prefix, so they are also the most cacheable part.
+  `total_tokens` includes them.
 - **Pricing is an assumption.** The model ids are anonymized, so no public price sheet applies
   and the tier order is not published. If the organizers post prices, they win; otherwise state
   the assumption explicitly and keep it in one place so it can be swapped.
 - **The cache trap — this is the crux of the price model.** Providers cache the shared input
   prefix across a task's calls. A model switch **resets that cache**, so every call after a
   switch pays full price for the entire accumulated prefix. In trajectories this long, that
-  penalty can dwarf the per-token saving that motivated the switch. Since there is no
-  `usage.cached_tokens`, the cached share has to be *inferred* from item-level prefix overlap. A
-  `CHANGE TO` decision that ignores this will look brilliant and be wrong.
+  penalty can dwarf the per-token saving that motivated the switch. A `CHANGE TO` decision that
+  ignores this will look brilliant and be wrong.
+  - Measured: **92.1% of all billed input across the export is cacheable prefix.** Total billed
+    input is 338 M est. tokens; per trajectory the median is 116 K and the maximum **11.7 M** —
+    cost is *quadratic* in trajectory length, because every call re-sends the whole history.
+    Input dominates output ~130:1, so price here is almost entirely an input-side story.
+  - No overlap search is required, and pretending otherwise would overstate what we know. Within
+    a line, call *i*'s prompt is by construction a prefix-extension of call *i−1*'s, so under a
+    perfect cache the cached share of call *i* is exactly call *i−1*'s whole prompt, and the sum
+    collapses to `total_tokens − prompt_tokens[last]`. `Trajectory.total_cached_tokens` is that
+    identity times **`trajectory_analyzer.CACHE_HIT_RATE`** (default `1.0`, the optimistic
+    bound). Real caches have TTLs and minimum block sizes and the export has no timestamps, so
+    that constant is the single place the assumption lives — sweep it from `price_model.py`.
 
 ### Performance
 
 - No quality labels exist in the export. Any performance score is a **proxy** — derive it from
-  observable structure (task type inferred from the toolset, trajectory length, tool-call
-  density, error and retry patterns in `function_call_output`, whether the trajectory reached
-  `submit_draft`), or from judge-model rescoring of individual calls.
+  observable structure (platform inferred from the toolset, trajectory length, tool-call density,
+  error and retry patterns in tool outputs), or from judge-model rescoring of individual calls.
+  `Trajectory.normalized_items` is there so a proxy can be derived without re-parsing the export.
+- **Check every candidate proxy against the leakage table in §4 first.** Coding dialect, item
+  encoding, `custom_tool_call`, `reasoning`, and an empty final message are all `served_model`
+  wearing a hat.
+- **`submit_draft` is not a completion signal.** It is the human-approval gate: Viktor prepares a
+  consequential action as a draft, a human approves it in thread state, and `submit_draft`
+  executes it (the output names the real tool behind the gate, e.g. `mcp_google_ads_remove_ad`).
+  It is offered in all 1,000 requests but invoked in only **14**, 37 calls total, and never as a
+  terminator. Read it as "performed a gated, irreversible action" — a task-type signal at ~1.4%
+  prevalence, not a success signal.
 - Judge-model rescoring is permitted with the team's own API keys, but the core pipeline must
   stay runnable **offline on a laptop, with no GPU and no API keys required**.
 
@@ -271,11 +372,15 @@ Live list — resolve, then fold the answer into the sections above.
 
 1. Price scoring formula, and the assumed price sheet behind it.
 2. Performance scoring formula, and which observable proxies feed it.
-3. `Trajectory` field set — what `trajectory_analyzer.py` extracts and precomputes.
-4. Routing granularity: the decision is framed as "the model for the next message", while the
-   dataset premise is one model per trajectory. Decide whether the router may switch
-   mid-trajectory — and if so, the cache penalty is not optional.
-5. Default weights, and the sweep used to produce the frontier.
+3. Routing granularity: the decision is framed as "the model for the next message", while each
+   exported line is a *complete* trajectory served end-to-end by one model. Decide whether the
+   router may switch mid-trajectory — and if so, the cache penalty is not optional, and §4's
+   92.1% cacheable share sets its size.
+4. Default weights, and the sweep used to produce the frontier.
+5. Whether to vendor the 3.6 MB `o200k_base` vocab into the repo. Today it is fetched once into
+   a gitignored `.tokenizer_cache/`, so a fresh clone needs network exactly once; vendoring would
+   make it offline from the first run at the cost of a binary blob in git.
 
 Resolved: `ModelLLM` field set (§2) and where the candidate pool comes from (§2,
-`pre_processing/model_list.py`).
+`pre_processing/model_list.py`); `Trajectory` field set (§2) — 19 fields, see
+`data_models/Trajectory.py`, which documents each one and its estimate/leak caveats inline.
