@@ -109,6 +109,7 @@ the same contract and a term in `model.py`'s average.
 |---|---|---|
 | `data_models/model_llm.py` | `ModelLLM` — one candidate model | **implemented** |
 | `data_models/Trajectory.py` | `Trajectory` — one trajectory, plus `NormalizedItem` | **implemented** |
+| `data_models/quality_base_value.py` | Static `[0, 1]` quality prior per model id, from public leaderboards | **implemented** — see §5 "Performance" |
 | `pre_processing/model_list.py` | Builds the candidate pool | **implemented** (static pool + real pricing; no scoring — that's `router_models/`'s job) |
 | `pre_processing/trajectory_analyzer.py` | Parses one JSON line into a `Trajectory` | **implemented** |
 | `router_models/price_model.py` | Assigns `price_score` | **implemented** — see §5 |
@@ -423,6 +424,22 @@ see §3).
   observable structure (platform inferred from the toolset, trajectory length, tool-call density,
   error and retry patterns in tool outputs), or from judge-model rescoring of individual calls.
   `Trajectory.normalized_items` is there so a proxy can be derived without re-parsing the export.
+- **`data_models/quality_base_value.py` supplies a base quality value for when candidates disagree.**
+  A proxy built from one trajectory's own observable structure can be noisy or silent on a given
+  call — e.g. everything ties, or the trajectory is too short to have a real tool-error or
+  retry-pattern signal yet. For those cases the router needs a fallback quality prior that isn't
+  just "pick one" — `QUALITY_BASE_SCORE` in that module is exactly that: a `[0, 1]` value per model
+  id, derived from three independent public leaderboards (Artificial Analysis Intelligence Index,
+  Agent Arena, Text Arena/LMArena). Each benchmark is min-max normalized to `[0, 1]` within this
+  project's 9-model pool first (so the three -- on wildly different native scales -- contribute
+  equally instead of whichever has the widest raw spread dominating), then averaged with **equal
+  weight**, unweighted, no further rescaling — the composite is that weighted average, full stop.
+  `1.0` is therefore the ceiling a model would hit by topping all three benchmarks at once, not a
+  value forced onto whoever leads this particular pool (no model here reaches it). See that
+  module's docstring for the exact method, sourcing, and the "peak effort variant per model"
+  convention it uses. It is a static, reproducible prior, not a substitute for a real
+  per-trajectory `performance_score`; treat it as the tie-breaker/floor `performance_model.py`
+  falls back on, not the primary signal.
 - **Check every candidate proxy against the leakage table in §4 first.** Coding dialect, item
   encoding, `custom_tool_call`, `reasoning`, and an empty final message are all `served_model`
   wearing a hat.
