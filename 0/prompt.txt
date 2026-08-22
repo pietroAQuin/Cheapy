@@ -1,0 +1,9 @@
+merge featue/trajetory-analyzer into main. Solve any conflicts regarding the readME file
+
+---
+
+explain how trajectory.py works. What are its most important variable and aspects
+
+---
+
+lets implement a way to test out the things we have implemented so far. Any ideas on how to do it?
