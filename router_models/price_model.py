@@ -1,0 +1,139 @@
+"""Assign `price_score` to each candidate `ModelLLM` for one `Trajectory`.
+
+Per the README's scoring contract (§5): `price_score` is `[0, 1]`, higher = cheaper,
+normalized *within this trajectory's candidate pool* — not against some global price
+scale. This module is a pure function of `(Trajectory, List[ModelLLM])`; the only place
+it reads `Trajectory.served_model` is the switching-cost check below, which the README
+explicitly carves out as legitimate (it is not a task-quality proxy).
+
+The crux, per README §5: providers cache the shared input prefix across a trajectory's
+calls, and a model switch resets that cache. So "cheaper per token" and "cheaper for
+the next call" are different questions once a trajectory has accumulated context — a
+model switch pays full uncached price for the whole next prompt, which in long
+trajectories can dwarf any per-token saving. That's the entire reason this module needs
+`served_model` at all: to tell a HOLD's mostly-cached next call apart from a CHANGE's
+fully-uncached one.
+
+The base for "how big is the next prompt" is `Trajectory.last_call_input_tokens`, not
+`total_tokens` -- see `_next_call_tokens` for why: every call resends the whole history
+up to that point, so the next call's size tracks the size of the *most recent* call, not
+the sum of every past call's own (already-superseded) full-history snapshot.
+"""
+
+from __future__ import annotations
+
+from data_models.model_llm import ModelLLM
+from data_models.Trajectory import Trajectory
+
+
+def _next_call_tokens(trajectory: Trajectory) -> tuple[float, float, float]:
+    """ESTIMATE the shape of the trajectory's next call.
+
+    Returns (last_call_input_tokens, increment_tokens, next_output_tokens).
+
+    `last_call_input_tokens` is `Trajectory.last_call_input_tokens` taken at face value:
+    the size of the most recently recovered call's full prompt (tool schemas + history
+    up to that point). Because every call resends the whole history, this is the best
+    available proxy for the size of the *next* call's prompt.
+
+    This deliberately does NOT use `total_tokens`. `total_tokens` sums every past call's
+    prompt -- each of which was itself a full-history resend at the time -- so it adds up
+    several superseded snapshots of a growing thing instead of reporting the size of the
+    latest one. On a trajectory whose prompt grows roughly linearly over `n` calls,
+    `total_tokens` overstates the real next-call size by very roughly a factor of `n/2`,
+    and can trip the context-window feasibility gate below for a model that would
+    actually serve the real next call fine. `last_call_input_tokens` doesn't have that
+    problem: it's one call's real size, not an accumulating sum.
+
+    `increment_tokens` approximates how much *new* content (tool outputs, replies, ...)
+    a typical call in this trajectory appends, as the trajectory's own average per-call
+    growth (`last_call_input_tokens / total_calls`) -- not `total_tokens / total_calls`,
+    which is the same superseded-snapshots mistake `last_call_input_tokens` exists to
+    avoid, just applied to the increment instead of the prompt size: it averages in
+    every past call's own (smaller, since-outgrown) prompt size, not how much this
+    trajectory actually grows per step. There is no better signal available for the
+    increment itself: the next call's actual new content is by definition not in the
+    log yet. This average is a separate, smaller known simplification (it can over- or
+    under-estimate a single step depending on whether the trajectory's growth is
+    front- or back-loaded) -- see the README's "Known simplifications".
+    """
+    last_call_input_tokens = float(trajectory.last_call_input_tokens)
+    increment_tokens = (
+        last_call_input_tokens / trajectory.total_calls if trajectory.total_calls else 0.0
+    )
+    next_output_tokens = trajectory.avg_output_tokens_per_call
+    return last_call_input_tokens, increment_tokens, next_output_tokens
+
+
+def _next_call_cost(trajectory: Trajectory, model: ModelLLM) -> float | None:
+    """ESTIMATE the USD cost of `model` serving this trajectory's next call.
+
+    Returns None if `model.context_window_size` can't hold the next call at all --
+    that candidate is infeasible, not merely expensive, and is handled separately. This
+    gate is now evaluated against `last_call_input_tokens` (the real next-prompt
+    estimate), not the whole trajectory's cumulative footprint, so a long trajectory no
+    longer trips it for a model that would comfortably serve the actual next call.
+    """
+    last_call_input_tokens, increment_tokens, next_output_tokens = _next_call_tokens(
+        trajectory
+    )
+    next_input_tokens = last_call_input_tokens + increment_tokens
+
+    if next_input_tokens + next_output_tokens > model.context_window_size:
+        return None
+
+    holding = model.name == trajectory.served_model
+    if holding:
+        # Same model as the log: the last call's whole prompt was already sent once and
+        # is cache-eligible; only the new increment is guaranteed uncached. Cap at
+        # `last_call_input_tokens` -- `total_cached_tokens` is a whole-trajectory
+        # aggregate and can exceed the size of any single call, but only that much of it
+        # is actually part of *this* call's bill.
+        cached_tokens = min(float(trajectory.total_cached_tokens), last_call_input_tokens)
+        uncached_tokens = (last_call_input_tokens - cached_tokens) + increment_tokens
+    else:
+        # A switch resets the provider's prefix cache: the whole next prompt is
+        # uncached, not just the increment. This is the cache trap from README §5.
+        cached_tokens = 0.0
+        uncached_tokens = next_input_tokens
+
+    input_cost = (
+        uncached_tokens * model.input_price_per_1m
+        + cached_tokens * model.cached_input_price_per_1m
+    ) / 1_000_000
+    output_cost = next_output_tokens * model.output_price_per_1m / 1_000_000
+    return input_cost + output_cost
+
+
+def score_price(trajectory: Trajectory, models: list[ModelLLM]) -> list[ModelLLM]:
+    """Enrich each `ModelLLM` in `models` with a `price_score` in `[0, 1]`.
+
+    Higher is cheaper. Costs are estimated per `_next_call_cost` and min-max
+    normalized across `models` — this trajectory's candidate pool only, per README
+    §5's "normalize within the candidate pool, not globally". Infeasible candidates
+    (next call wouldn't fit their context window) are scored 0.0 and excluded from the
+    min-max range so one unusable model doesn't compress everyone else's spread.
+    """
+    costs: dict[str, float | None] = {
+        model.name: _next_call_cost(trajectory, model) for model in models
+    }
+
+    feasible_costs = [cost for cost in costs.values() if cost is not None]
+    if not feasible_costs:
+        for model in models:
+            model.price_score = 0.0
+        return models
+
+    cheapest, priciest = min(feasible_costs), max(feasible_costs)
+    spread = priciest - cheapest
+
+    for model in models:
+        cost = costs[model.name]
+        if cost is None:
+            model.price_score = 0.0
+        elif spread == 0:
+            model.price_score = 1.0
+        else:
+            model.price_score = (priciest - cost) / spread
+
+    return models

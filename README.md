@@ -111,19 +111,21 @@ the same contract and a term in `model.py`'s average.
 | `data_models/Trajectory.py` | `Trajectory` — one trajectory, plus `NormalizedItem` | **implemented** |
 | `pre_processing/model_list.py` | Builds the candidate pool | **implemented** (static pool + real pricing; no scoring — that's `router_models/`'s job) |
 | `pre_processing/trajectory_analyzer.py` | Parses one JSON line into a `Trajectory` | **implemented** |
-| `router_models/price_model.py` | Assigns `price_score` | **empty stub** |
+| `router_models/price_model.py` | Assigns `price_score` | **implemented** — see §5 |
 | `router_models/performance_model.py` | Assigns `performance_score` | **empty stub** |
 | `router_models/model.py` | Weighted aggregation, ranking, HOLD/CHANGE decision | **empty stub** |
+| `tests/test_price_model.py` | Unit tests for the price scoring formula (`unittest`, stdlib only) | **implemented** |
 | `data/` | The redacted export (gitignored, challenge-use only) | present locally |
 | `code_agent_utils/` | Organizers' briefing + `/setup`, `/make-presentation`, `/prepare-submission` skills | supplied |
 | `tests/` | Unit tests for the implemented modules, against hand-built fixtures (not the export) | covers `data_models/`, `pre_processing/` |
 
 `data_models/model_llm.py`, `data_models/Trajectory.py`, `pre_processing/model_list.py`, and
 `pre_processing/trajectory_analyzer.py` are implemented and cross-checked against the export —
-treat their contracts as real. Every file under `router_models/` is still a **zero-byte
-placeholder**: the structure is decided, those implementations are not. Nothing yet wires the
-implemented pre-processing stage into a scoring stage — you are not breaking an existing
-contract, you are writing the first one.
+treat their contracts as real. `router_models/price_model.py` is implemented and sanity-checked
+against synthetic trajectories (see §5) but not yet run against the real export. Every other file
+under `router_models/` is still a **zero-byte placeholder**: the structure is decided, those
+implementations are not. Nothing yet wires `router_models/model.py`'s aggregation into a runnable
+end-to-end pipeline — you are not breaking an existing contract, you are writing the first one.
 
 Run the suite with `pip install -r requirements-dev.txt && python -m pytest`. Tests build their
 own synthetic trajectory lines (both encodings) in `tests/conftest.py` rather than reading
@@ -260,9 +262,10 @@ need. Reaching for it in a *score* is the mistake.
 
 ## 5. Scoring
 
-> **Both scoring criteria are undefined as of this writing.** This section records the
-> constraints any implementation must respect, not a design that has been agreed. When you
-> settle one, write it here.
+> **Performance scoring is undefined as of this writing.** Price scoring is implemented — see
+> "Price scoring formula" below. This section records the constraints any implementation must
+> respect, not a design that has been agreed for the parts still open. When you settle one, write
+> it here.
 
 ### Shared contract
 
@@ -315,6 +318,94 @@ need. Reaching for it in a *score* is the mistake.
     identity times **`trajectory_analyzer.CACHE_HIT_RATE`** (default `1.0`, the optimistic
     bound). Real caches have TTLs and minimum block sizes and the export has no timestamps, so
     that constant is the single place the assumption lives — sweep it from `price_model.py`.
+
+#### Price scoring formula (implemented, `router_models/price_model.py`)
+
+`score_price(trajectory, models)` estimates the USD cost of each candidate serving the
+trajectory's **next call**, then min-max normalizes those costs into `price_score ∈ [0, 1]`
+across the candidate pool for this trajectory (cheapest → `1.0`, priciest → `0.0`). It reads only
+`Trajectory` fields plus one `ModelLLM` at a time — the only place it looks at
+`trajectory.served_model` is the hold/switch cache check below, which is the exception the shared
+contract above carves out.
+
+1. **Shape the next call, from `Trajectory` fields alone:**
+   - `last_call_input_tokens` — the size of the most recently recovered call's full prompt (tool
+     schemas + history up to that point). Since every call resends the whole history, this is the
+     best available proxy for the size of the *next* call's prompt.
+     - **This replaced an earlier, incorrect base quantity, `total_tokens`.** `total_tokens` is a
+       *sum* across every past call's prompt — each of which was itself a full-history resend at
+       the time — so it adds up several superseded snapshots of a growing thing instead of
+       reporting the size of the latest one. On a trajectory whose prompt grows roughly linearly
+       over `n` calls, `total_tokens` overstates the real next-call size by very roughly a factor
+       of `n/2` — see "Known simplifications" below for the worked example this used to get wrong.
+       `last_call_input_tokens` is one call's real, measured size, not an accumulating sum, so it
+       doesn't have that problem.
+   - `already_cached_tokens = total_cached_tokens`, capped at `last_call_input_tokens`.
+     `total_cached_tokens` is documented (per its own field docstring) as a share of
+     `total_tokens` — a whole-trajectory cache aggregate, not specifically the last call's cache
+     share — so it can exceed `last_call_input_tokens` on a long trajectory. Only that much of it
+     is actually part of *this* call's bill, hence the cap. (This cap was present even in the
+     `total_tokens`-based formula, where it was effectively vacuous — `total_cached_tokens` is
+     always `≤ total_tokens` by construction. Against `last_call_input_tokens` the cap is now the
+     binding, meaningful constraint in the common case.)
+   - `increment_tokens = last_call_input_tokens / total_calls` — an ESTIMATE of how much *new*
+     content (tool outputs, replies, ...) a typical call in this trajectory appends, taken as the
+     trajectory's own average per-call growth. **Not `total_tokens / total_calls`** — that repeats
+     the same superseded-snapshots mistake `last_call_input_tokens` exists to fix, just applied to
+     the increment instead of the base: it averages in every past call's own (smaller) prompt size
+     rather than measuring how much this trajectory actually grows per step, and settles around
+     roughly half of `last_call_input_tokens` regardless of trajectory length instead of shrinking
+     as trajectories get longer. The next call's actual new content is by definition not yet in the
+     log, so dividing `last_call_input_tokens` by `total_calls` is the best available stand-in; it's
+     a smaller, separate known simplification from the `last_call_input_tokens` fix above — see
+     "Known simplifications".
+   - `next_output_tokens = avg_output_tokens_per_call` (already excludes the trajectory's
+     unobserved final output, per `Trajectory`'s own field contract).
+2. **Feasibility gate.** If `next_input_tokens + next_output_tokens` (where
+   `next_input_tokens = last_call_input_tokens + increment_tokens`) exceeds a candidate's
+   `context_window_size`, that candidate can't serve the call at all — its cost is `None`, it is
+   forced to `price_score = 0.0`, and it is excluded from the min-max range so one unusable model
+   doesn't compress everyone else's spread. Because this now compares against
+   `last_call_input_tokens` rather than the cumulative `total_tokens`, a long trajectory no longer
+   trips the gate for a model that would actually serve the real next call fine.
+3. **Apply the cache trap to the remaining candidates:**
+   - **HOLD** (`model.name == trajectory.served_model`): `already_cached_tokens` bills at
+     `cached_input_price_per_1m`; everything else —
+     `(last_call_input_tokens − already_cached_tokens) + increment_tokens` — bills at
+     `input_price_per_1m`.
+   - **CHANGE** (any other candidate): the switch resets the provider's cache, so the *entire*
+     `next_input_tokens` bills at `input_price_per_1m` — none of it is cached.
+   - Either way, `next_output_tokens` bills at `output_price_per_1m`
+     (`cached_output_price_per_1m` is 0.0 for every seeded model — see `pre_processing/model_list.py`
+     — since neither pricing source discounts a freshly generated output token).
+   - `cost = (uncached_tokens · input_price_per_1m + cached_tokens · cached_input_price_per_1m
+     + next_output_tokens · output_price_per_1m) / 1e6`.
+4. **Normalize:** `price_score = (max_cost − cost) / (max_cost − min_cost)` over feasible
+   candidates; if every feasible candidate ties, all get `1.0`.
+
+This reproduces the cache trap directly: a candidate with identical per-token rates to
+`served_model` scores strictly lower than holding, because a switch loses the cache discount on
+`already_cached_tokens`; a much cheaper candidate can still outscore holding if its base rate is
+low enough to absorb that reset penalty. With `total_cached_tokens = 0`, holding and switching to
+an identically-priced model cost exactly the same — there is no cache to lose. Covered by
+`tests/test_price_model.py` (full cache, partial cache, no cache, switching, the cache-aggregate
+cap, the feasibility gate, and a regression test pinning the `last_call_input_tokens` fix itself);
+verified against synthetic trajectories only, not yet against the real export (no chunk was
+available locally when this was written — see §3).
+
+**Known simplifications, stated rather than hidden:**
+- `increment_tokens` is a same-trajectory average (`last_call_input_tokens / total_calls`), not a
+  real prediction of the next call's size; a trajectory with unusually front-loaded or back-loaded
+  growth will be mis-estimated. Unlike the old `accumulated_context_tokens` bug, this is a
+  bounded, secondary error — it only affects the *increment* term, not the whole next-call base.
+- The formula scores one hypothetical next call, not the rest of the trajectory to come — it
+  matches the README's "model for the next message" framing (§1) but doesn't project multiple
+  future calls or their compounding cache effects.
+- Feasibility is a hard cutoff (`0.0`) rather than a graduated penalty near the context limit.
+- `total_cached_tokens` is still a whole-trajectory aggregate (see `Trajectory`'s field docstring
+  and `CACHE_HIT_RATE` in `pre_processing/trajectory_analyzer.py`), just capped down to
+  `last_call_input_tokens` before use — it is not itself re-derived as "the last call's own cache
+  share" from first principles.
 
 ### Performance
 
@@ -375,17 +466,19 @@ claim, and one known weakness.
 
 Live list — resolve, then fold the answer into the sections above.
 
-1. Price scoring formula, and the assumed price sheet behind it.
-2. Performance scoring formula, and which observable proxies feed it.
-3. Routing granularity: the decision is framed as "the model for the next message", while each
+1. Performance scoring formula, and which observable proxies feed it.
+2. Routing granularity: the decision is framed as "the model for the next message", while each
    exported line is a *complete* trajectory served end-to-end by one model. Decide whether the
    router may switch mid-trajectory — and if so, the cache penalty is not optional, and §4's
    92.1% cacheable share sets its size.
-4. Default weights, and the sweep used to produce the frontier.
-5. Whether to vendor the 3.6 MB `o200k_base` vocab into the repo. Today it is fetched once into
+3. Default weights, and the sweep used to produce the frontier.
+4. Whether to vendor the 3.6 MB `o200k_base` vocab into the repo. Today it is fetched once into
    a gitignored `.tokenizer_cache/`, so a fresh clone needs network exactly once; vendoring would
    make it offline from the first run at the cost of a binary blob in git.
+5. Run `price_model.py` against the real export once a chunk is available locally, and fold any
+   surprises (e.g. `increment_tokens` behaving badly on outlier trajectories) back into §5.
 
 Resolved: `ModelLLM` field set (§2) and where the candidate pool comes from (§2,
 `pre_processing/model_list.py`); `Trajectory` field set (§2) — 19 fields, see
-`data_models/Trajectory.py`, which documents each one and its estimate/leak caveats inline.
+`data_models/Trajectory.py`, which documents each one and its estimate/leak caveats inline; price
+scoring formula and the assumed price sheet behind it (§5, `router_models/price_model.py`).
