@@ -19,3 +19,7 @@ but every time you send a message you have to resend everything, so isnt that ri
 ---
 
 okay. lets fix it
+
+---
+
+commit and push
