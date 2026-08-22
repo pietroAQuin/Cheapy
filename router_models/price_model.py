@@ -13,6 +13,10 @@ model switch pays full uncached price for the whole accumulated prefix, which in
 trajectories can dwarf any per-token saving. That's the entire reason this module needs
 `served_model` at all: to tell a HOLD's mostly-cached next call apart from a CHANGE's
 fully-uncached one.
+
+`total_cached_tokens` is used directly as the already-cached share of that accumulated
+context — see `_next_call_tokens` for why, and why an earlier version of this module
+was wrong to instead assume the entire accumulated context was cached under HOLD.
 """
 
 from __future__ import annotations
@@ -24,26 +28,40 @@ from data_models.Trajectory import Trajectory
 def _next_call_tokens(trajectory: Trajectory) -> tuple[float, float, float]:
     """ESTIMATE the shape of the trajectory's next call.
 
-    Returns (current_context_tokens, increment_tokens, next_output_tokens).
+    Returns (accumulated_context_tokens, increment_tokens, next_output_tokens).
 
-    `current_context_tokens` is the size of the prompt the *last recovered* call sent:
-    by construction in `trajectory_analyzer.analyze`, `total_cached_tokens` is the
-    cache-hit-rate-weighted complement of exactly that quantity, so
-    `total_tokens - total_cached_tokens` recovers it without this module needing to
-    know the cache-hit-rate assumption used upstream. It is what any next call — held
-    or switched — must resend as its prefix.
+    `accumulated_context_tokens` is `Trajectory.total_tokens` taken at face value: the
+    total input tokens billed across the trajectory's calls so far, before any cache
+    discount (see that field's docstring). This is a *cumulative* total across every
+    past call, not the size of any one prompt — a trajectory's calls each resend the
+    whole history, so `total_tokens` is already the whole-trajectory-to-date footprint
+    a switch has to re-pay. Treated this way, the "next call" estimate below reads as
+    "the switch penalty at stake right now", which is what the cache trap is actually
+    about, at the cost of overstating the literal byte size of one upcoming API call —
+    see the README's "Known simplifications" for the size of that overstatement on long
+    trajectories.
+
+    `total_cached_tokens` is a share of that same `total_tokens` (again, by its own
+    docstring) — the part of it already known to be cache-eligible. An earlier version
+    of this function computed `total_tokens - total_cached_tokens` and called *that* the
+    "current context", then separately assumed the result was 100% cached under HOLD.
+    That double-used `total_cached_tokens` in contradictory ways: first to define a
+    quantity as "the not-yet-cached remainder", then to treat that same remainder as
+    fully cached. This version keeps `total_tokens` and `total_cached_tokens` as the two
+    numbers they actually are — a whole and its already-cached share — and never
+    re-derives one from the other.
 
     `increment_tokens` approximates how much *new* content (tool outputs, replies, ...)
     a typical call in this trajectory appends, as the trajectory's own average per-call
-    growth (current context / calls so far). There is no better signal available: the
-    next call's actual new content is by definition not in the log yet.
+    growth (accumulated context / calls so far). There is no better signal available:
+    the next call's actual new content is by definition not in the log yet.
     """
-    current_context_tokens = max(trajectory.total_tokens - trajectory.total_cached_tokens, 0)
+    accumulated_context_tokens = float(trajectory.total_tokens)
     increment_tokens = (
-        current_context_tokens / trajectory.total_calls if trajectory.total_calls else 0.0
+        accumulated_context_tokens / trajectory.total_calls if trajectory.total_calls else 0.0
     )
     next_output_tokens = trajectory.avg_output_tokens_per_call
-    return current_context_tokens, increment_tokens, next_output_tokens
+    return accumulated_context_tokens, increment_tokens, next_output_tokens
 
 
 def _next_call_cost(trajectory: Trajectory, model: ModelLLM) -> float | None:
@@ -51,19 +69,26 @@ def _next_call_cost(trajectory: Trajectory, model: ModelLLM) -> float | None:
 
     Returns None if `model.context_window_size` can't hold the next call at all —
     that candidate is infeasible, not merely expensive, and is handled separately.
+    Note the feasibility check compares against `accumulated_context_tokens` (the whole
+    trajectory's cumulative footprint, per `_next_call_tokens`), which is stricter than
+    the real constraint a context window enforces (the size of one actual prompt) — see
+    the README's "Known simplifications".
     """
-    current_context_tokens, increment_tokens, next_output_tokens = _next_call_tokens(trajectory)
-    next_input_tokens = current_context_tokens + increment_tokens
+    accumulated_context_tokens, increment_tokens, next_output_tokens = _next_call_tokens(
+        trajectory
+    )
+    next_input_tokens = accumulated_context_tokens + increment_tokens
 
     if next_input_tokens + next_output_tokens > model.context_window_size:
         return None
 
     holding = model.name == trajectory.served_model
     if holding:
-        # Same model as the log: the accumulated context is a cache hit, only the new
-        # increment is billed uncached.
-        cached_tokens = current_context_tokens
-        uncached_tokens = increment_tokens
+        # Same model as the log: bill the trajectory's own already-cached share at the
+        # cached rate, and everything else — the never-cached remainder of the
+        # accumulated context, plus the new increment — at the normal rate.
+        cached_tokens = min(float(trajectory.total_cached_tokens), accumulated_context_tokens)
+        uncached_tokens = (accumulated_context_tokens - cached_tokens) + increment_tokens
     else:
         # A switch resets the provider's prefix cache: the whole next prompt is
         # uncached, not just the increment. This is the cache trap from README §5.

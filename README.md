@@ -114,6 +114,7 @@ the same contract and a term in `model.py`'s average.
 | `router_models/price_model.py` | Assigns `price_score` | **implemented** — see §5 |
 | `router_models/performance_model.py` | Assigns `performance_score` | **empty stub** |
 | `router_models/model.py` | Weighted aggregation, ranking, HOLD/CHANGE decision | **empty stub** |
+| `tests/test_price_model.py` | Unit tests for the price scoring formula (`unittest`, stdlib only) | **implemented** |
 | `data/` | The redacted export (gitignored, challenge-use only) | present locally |
 | `code_agent_utils/` | Organizers' briefing + `/setup`, `/make-presentation`, `/prepare-submission` skills | supplied |
 
@@ -323,25 +324,43 @@ across the candidate pool for this trajectory (cheapest → `1.0`, priciest → 
 contract above carves out.
 
 1. **Shape the next call, from `Trajectory` fields alone:**
-   - `current_context_tokens = total_tokens − total_cached_tokens`. By construction in
-     `trajectory_analyzer.analyze`, this is the size of the prompt the *last recovered* call
-     sent — i.e. exactly the prefix any next call, held or switched, has to resend. Recovering it
-     this way means `price_model.py` never needs to know the `CACHE_HIT_RATE` assumption baked in
-     upstream.
-   - `increment_tokens = current_context_tokens / total_calls` — an ESTIMATE of how much *new*
+   - `accumulated_context_tokens = total_tokens`, taken at face value — the total input tokens
+     billed across the trajectory's calls so far, before any cache discount (per that field's own
+     docstring). This is a **cumulative** total across every past call, not the size of any one
+     prompt: each call resends the whole history, so `total_tokens` is already the
+     whole-trajectory-to-date footprint a switch would have to re-pay. Reading it this way makes
+     the "next call" estimate really mean "the switch penalty at stake right now" — see "Known
+     simplifications" below for what that costs in literal prompt-size accuracy.
+   - `already_cached_tokens = total_cached_tokens` — a *share of that same `total_tokens`*, per its
+     own docstring: the part already known to be cache-eligible. Used directly, capped at
+     `accumulated_context_tokens` for safety.
+     - **This replaced an earlier, incorrect version of the formula.** That version computed
+       `total_tokens − total_cached_tokens` and called the result "current context", then
+       separately assumed the *entire* result was cached under HOLD — using `total_cached_tokens`
+       once to define a quantity as "the not-yet-cached remainder" and then, contradictorily,
+       treating that same remainder as fully cached. This version never re-derives one field from
+       the other: `total_tokens` is the whole, `total_cached_tokens` is its already-cached share,
+       full stop.
+   - `increment_tokens = accumulated_context_tokens / total_calls` — an ESTIMATE of how much *new*
      content (tool outputs, replies, ...) a typical call in this trajectory appends, taken as the
      trajectory's own average per-call growth. The next call's actual new content is by
-     definition not yet in the log, so this is the best available stand-in.
+     definition not yet in the log, so this is the best available stand-in. (Unchanged from the
+     original formula, modulo the renamed base quantity.)
    - `next_output_tokens = avg_output_tokens_per_call` (already excludes the trajectory's
      unobserved final output, per `Trajectory`'s own field contract).
 2. **Feasibility gate.** If `next_input_tokens + next_output_tokens` (where
-   `next_input_tokens = current_context_tokens + increment_tokens`) exceeds a candidate's
+   `next_input_tokens = accumulated_context_tokens + increment_tokens`) exceeds a candidate's
    `context_window_size`, that candidate can't serve the call at all — its cost is `None`, it is
    forced to `price_score = 0.0`, and it is excluded from the min-max range so one unusable model
-   doesn't compress everyone else's spread.
+   doesn't compress everyone else's spread. Because `accumulated_context_tokens` is cumulative
+   (see above), this gate is **stricter than the real constraint** a context window enforces (the
+   size of one actual prompt, not the whole trajectory's resend history) — a long trajectory can
+   trip it well before any single real call actually would. See "Known simplifications".
 3. **Apply the cache trap to the remaining candidates:**
-   - **HOLD** (`model.name == trajectory.served_model`): `current_context_tokens` bills at
-     `cached_input_price_per_1m`, only `increment_tokens` bills at `input_price_per_1m`.
+   - **HOLD** (`model.name == trajectory.served_model`): `already_cached_tokens` bills at
+     `cached_input_price_per_1m`; everything else —
+     `(accumulated_context_tokens − already_cached_tokens) + increment_tokens` — bills at
+     `input_price_per_1m`.
    - **CHANGE** (any other candidate): the switch resets the provider's cache, so the *entire*
      `next_input_tokens` bills at `input_price_per_1m` — none of it is cached.
    - Either way, `next_output_tokens` bills at `output_price_per_1m`
@@ -354,17 +373,30 @@ contract above carves out.
 
 This reproduces the cache trap directly: a candidate with identical per-token rates to
 `served_model` scores strictly lower than holding, because a switch loses the cache discount on
-`current_context_tokens`; a much cheaper candidate can still outscore holding if its base rate is
-low enough to absorb that reset penalty. Verified against synthetic trajectories, not yet against
-the real export (no chunk was available locally when this was written — see §3).
+`already_cached_tokens`; a much cheaper candidate can still outscore holding if its base rate is
+low enough to absorb that reset penalty. With `total_cached_tokens = 0`, holding and switching to
+an identically-priced model cost exactly the same — there is no cache to lose. Covered by
+`tests/test_price_model.py` (full cache, partial cache, no cache, switching, and the feasibility
+gate); verified against synthetic trajectories only, not yet against the real export (no chunk was
+available locally when this was written — see §3).
 
 **Known simplifications, stated rather than hidden:**
+- `accumulated_context_tokens` is `total_tokens`, a cumulative sum across every past call — not
+  the byte size of one upcoming prompt. On the 20-call, 1M-token synthetic trajectory in
+  `tests/test_price_model.py`, the real next prompt would be roughly 50K tokens; this formula
+  prices the next call as if it sent the full 1M+, which is also why that same trajectory now
+  trips the feasibility gate against a 1M-token context window even though the actual next call
+  would fit comfortably. Accepted deliberately: it keeps `price_score` computable from `Trajectory`
+  fields alone, with no re-derivation of `total_cached_tokens` into a different, inconsistent
+  quantity — see the "This replaced an earlier, incorrect version" note above for why the
+  alternative was worse.
 - `increment_tokens` is a same-trajectory average, not a real prediction of the next call's size;
   a trajectory with unusually front-loaded or back-loaded growth will be mis-estimated.
 - The formula scores one hypothetical next call, not the rest of the trajectory to come — it
   matches the README's "model for the next message" framing (§1) but doesn't project multiple
   future calls or their compounding cache effects.
-- Feasibility is a hard cutoff (`0.0`) rather than a graduated penalty near the context limit.
+- Feasibility is a hard cutoff (`0.0`) rather than a graduated penalty near the context limit, and
+  per the point above it is evaluated against the cumulative total, not the real next-prompt size.
 
 ### Performance
 
