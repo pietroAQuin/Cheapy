@@ -292,6 +292,7 @@ def analyze(line: str | dict, id: int) -> Trajectory:
         total_calls=total_calls,
         total_tokens=total_tokens,
         total_cached_tokens=total_cached_tokens,
+        last_call_input_tokens=prompt_tokens[-1] if prompt_tokens else 0,
         total_tool_calls=total_tool_calls,
         total_images_received=total_images_received,
         total_ai_messages=total_ai_messages,

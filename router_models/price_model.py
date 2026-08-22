@@ -9,14 +9,15 @@ explicitly carves out as legitimate (it is not a task-quality proxy).
 The crux, per README §5: providers cache the shared input prefix across a trajectory's
 calls, and a model switch resets that cache. So "cheaper per token" and "cheaper for
 the next call" are different questions once a trajectory has accumulated context — a
-model switch pays full uncached price for the whole accumulated prefix, which in long
+model switch pays full uncached price for the whole next prompt, which in long
 trajectories can dwarf any per-token saving. That's the entire reason this module needs
 `served_model` at all: to tell a HOLD's mostly-cached next call apart from a CHANGE's
 fully-uncached one.
 
-`total_cached_tokens` is used directly as the already-cached share of that accumulated
-context — see `_next_call_tokens` for why, and why an earlier version of this module
-was wrong to instead assume the entire accumulated context was cached under HOLD.
+The base for "how big is the next prompt" is `Trajectory.last_call_input_tokens`, not
+`total_tokens` -- see `_next_call_tokens` for why: every call resends the whole history
+up to that point, so the next call's size tracks the size of the *most recent* call, not
+the sum of every past call's own (already-superseded) full-history snapshot.
 """
 
 from __future__ import annotations
@@ -28,67 +29,64 @@ from data_models.Trajectory import Trajectory
 def _next_call_tokens(trajectory: Trajectory) -> tuple[float, float, float]:
     """ESTIMATE the shape of the trajectory's next call.
 
-    Returns (accumulated_context_tokens, increment_tokens, next_output_tokens).
+    Returns (last_call_input_tokens, increment_tokens, next_output_tokens).
 
-    `accumulated_context_tokens` is `Trajectory.total_tokens` taken at face value: the
-    total input tokens billed across the trajectory's calls so far, before any cache
-    discount (see that field's docstring). This is a *cumulative* total across every
-    past call, not the size of any one prompt — a trajectory's calls each resend the
-    whole history, so `total_tokens` is already the whole-trajectory-to-date footprint
-    a switch has to re-pay. Treated this way, the "next call" estimate below reads as
-    "the switch penalty at stake right now", which is what the cache trap is actually
-    about, at the cost of overstating the literal byte size of one upcoming API call —
-    see the README's "Known simplifications" for the size of that overstatement on long
-    trajectories.
+    `last_call_input_tokens` is `Trajectory.last_call_input_tokens` taken at face value:
+    the size of the most recently recovered call's full prompt (tool schemas + history
+    up to that point). Because every call resends the whole history, this is the best
+    available proxy for the size of the *next* call's prompt.
 
-    `total_cached_tokens` is a share of that same `total_tokens` (again, by its own
-    docstring) — the part of it already known to be cache-eligible. An earlier version
-    of this function computed `total_tokens - total_cached_tokens` and called *that* the
-    "current context", then separately assumed the result was 100% cached under HOLD.
-    That double-used `total_cached_tokens` in contradictory ways: first to define a
-    quantity as "the not-yet-cached remainder", then to treat that same remainder as
-    fully cached. This version keeps `total_tokens` and `total_cached_tokens` as the two
-    numbers they actually are — a whole and its already-cached share — and never
-    re-derives one from the other.
+    This deliberately does NOT use `total_tokens`. `total_tokens` sums every past call's
+    prompt -- each of which was itself a full-history resend at the time -- so it adds up
+    several superseded snapshots of a growing thing instead of reporting the size of the
+    latest one. On a trajectory whose prompt grows roughly linearly over `n` calls,
+    `total_tokens` overstates the real next-call size by very roughly a factor of `n/2`,
+    and can trip the context-window feasibility gate below for a model that would
+    actually serve the real next call fine. `last_call_input_tokens` doesn't have that
+    problem: it's one call's real size, not an accumulating sum.
 
     `increment_tokens` approximates how much *new* content (tool outputs, replies, ...)
     a typical call in this trajectory appends, as the trajectory's own average per-call
-    growth (accumulated context / calls so far). There is no better signal available:
-    the next call's actual new content is by definition not in the log yet.
+    growth (`total_tokens / total_calls`). There is no better signal available: the next
+    call's actual new content is by definition not in the log yet. This average is a
+    separate, smaller known simplification (it can over- or under-estimate a single
+    step depending on whether the trajectory's growth is front- or back-loaded) --
+    see the README's "Known simplifications".
     """
-    accumulated_context_tokens = float(trajectory.total_tokens)
+    last_call_input_tokens = float(trajectory.last_call_input_tokens)
     increment_tokens = (
-        accumulated_context_tokens / trajectory.total_calls if trajectory.total_calls else 0.0
+        float(trajectory.total_tokens) / trajectory.total_calls if trajectory.total_calls else 0.0
     )
     next_output_tokens = trajectory.avg_output_tokens_per_call
-    return accumulated_context_tokens, increment_tokens, next_output_tokens
+    return last_call_input_tokens, increment_tokens, next_output_tokens
 
 
 def _next_call_cost(trajectory: Trajectory, model: ModelLLM) -> float | None:
     """ESTIMATE the USD cost of `model` serving this trajectory's next call.
 
-    Returns None if `model.context_window_size` can't hold the next call at all —
-    that candidate is infeasible, not merely expensive, and is handled separately.
-    Note the feasibility check compares against `accumulated_context_tokens` (the whole
-    trajectory's cumulative footprint, per `_next_call_tokens`), which is stricter than
-    the real constraint a context window enforces (the size of one actual prompt) — see
-    the README's "Known simplifications".
+    Returns None if `model.context_window_size` can't hold the next call at all --
+    that candidate is infeasible, not merely expensive, and is handled separately. This
+    gate is now evaluated against `last_call_input_tokens` (the real next-prompt
+    estimate), not the whole trajectory's cumulative footprint, so a long trajectory no
+    longer trips it for a model that would comfortably serve the actual next call.
     """
-    accumulated_context_tokens, increment_tokens, next_output_tokens = _next_call_tokens(
+    last_call_input_tokens, increment_tokens, next_output_tokens = _next_call_tokens(
         trajectory
     )
-    next_input_tokens = accumulated_context_tokens + increment_tokens
+    next_input_tokens = last_call_input_tokens + increment_tokens
 
     if next_input_tokens + next_output_tokens > model.context_window_size:
         return None
 
     holding = model.name == trajectory.served_model
     if holding:
-        # Same model as the log: bill the trajectory's own already-cached share at the
-        # cached rate, and everything else — the never-cached remainder of the
-        # accumulated context, plus the new increment — at the normal rate.
-        cached_tokens = min(float(trajectory.total_cached_tokens), accumulated_context_tokens)
-        uncached_tokens = (accumulated_context_tokens - cached_tokens) + increment_tokens
+        # Same model as the log: the last call's whole prompt was already sent once and
+        # is cache-eligible; only the new increment is guaranteed uncached. Cap at
+        # `last_call_input_tokens` -- `total_cached_tokens` is a whole-trajectory
+        # aggregate and can exceed the size of any single call, but only that much of it
+        # is actually part of *this* call's bill.
+        cached_tokens = min(float(trajectory.total_cached_tokens), last_call_input_tokens)
+        uncached_tokens = (last_call_input_tokens - cached_tokens) + increment_tokens
     else:
         # A switch resets the provider's prefix cache: the whole next prompt is
         # uncached, not just the increment. This is the cache trap from README §5.
