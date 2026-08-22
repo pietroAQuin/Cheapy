@@ -1,0 +1,14 @@
+# Dataset — challenge use only, no redistribution (see export/LICENSE)
+export/
+*.jsonl.tar.gz
+*.jsonl
+# derived results are safe to track
+!results/*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local scratch
+.venv/
+venv/
