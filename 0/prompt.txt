@@ -82,3 +82,7 @@ wait. why is the value for fable 1? the final value should be calculated with an
 ---
 
 how did you calculate the final values? what was the formula? because the values from the bechmarkings didnt go from 0 to 1
+
+---
+
+commit and push it
