@@ -2,15 +2,42 @@ from pydantic import BaseModel, Field
 
 
 class ModelLLM(BaseModel):
-    """Describes a single LLM model/variant and everything needed to price and compare it."""
+    """One scored entry per anonymized model id seen in the export.
 
-    name: str
-    family: str
+    Capability and price are kept as two separate scores rather than one
+    blended number, so the router can trade them off explicitly instead of
+    ranking models on a single opaque figure.
+    """
+
+    name: str  # anonymized model id as logged in the export, e.g. "claude-opus-5"
+    family: str  # shared prefix across generations, e.g. "claude-opus"
+
+    capability_score: float = Field(
+        description="0-1, higher = more capable. See pre_processing/model_list.py "
+        "for how this is currently seeded — a naming-tier prior, not a measurement."
+    )
+    capability_provenance: str = Field(
+        default="assumed",
+        description="'assumed' while capability_score is a naming-tier prior; "
+        "flip to 'empirical' once a later pass (judge-model scoring or "
+        "revealed-preference analysis of the traces) replaces it with a measured value.",
+    )
+
+    price_score: float | None = Field(
+        default=None,
+        description="0-1, higher = cheaper. Placeholder: real cache-aware pricing "
+        "isn't wired up yet (router_models/price_model.py). None means 'not "
+        "computed yet', not 'free' — don't treat it as 0 in any trade-off math.",
+    )
     tier: int = Field(description="Relative capability/cost tier within its family; lower = cheaper/smaller.")
 
-    cache_window_size: int = Field(description="Max number of tokens that can be served from cache (e.g. context window eligible for prompt caching).")
+    cache_window_size: int = Field(
+        description="Max number of tokens that can be served from cache (e.g. context window eligible for prompt caching).")
 
     input_price_per_1m: float = Field(description="USD per 1M uncached input tokens.")
+
     cached_input_price_per_1m: float = Field(description="USD per 1M cached input tokens.")
+
     output_price_per_1m: float = Field(description="USD per 1M uncached output tokens.")
+
     cached_output_price_per_1m: float = Field(description="USD per 1M cached output tokens.")
