@@ -1834,3 +1834,7 @@ compare it again againt what i pasted
 ---
 
 delete the main for now. change capability_score to performance_score and change the placeholder to None. Add final_score field
+
+---
+
+check everything again. I deleted the tier variable. If all is good commit and push. then merge to main
