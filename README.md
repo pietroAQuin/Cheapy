@@ -361,13 +361,18 @@ contract above carves out.
      "Known simplifications".
    - `next_output_tokens = avg_output_tokens_per_call` (already excludes the trajectory's
      unobserved final output, per `Trajectory`'s own field contract).
-2. **Feasibility gate.** If `next_input_tokens + next_output_tokens` (where
-   `next_input_tokens = last_call_input_tokens + increment_tokens`) exceeds a candidate's
-   `context_window_size`, that candidate can't serve the call at all — its cost is `None`, it is
-   forced to `price_score = 0.0`, and it is excluded from the min-max range so one unusable model
-   doesn't compress everyone else's spread. Because this now compares against
-   `last_call_input_tokens` rather than the cumulative `total_tokens`, a long trajectory no longer
-   trips the gate for a model that would actually serve the real next call fine.
+2. **No candidate is excluded for having too small a context window.** If
+   `last_call_input_tokens` is bigger than a candidate's `context_window_size`, the formula assumes
+   the context gets **compacted** (summarized) down to that model's max capacity before the call is
+   sent: `last_call_input_tokens` is clamped to `min(last_call_input_tokens, context_window_size)`,
+   and everything downstream — the cache split, `increment_tokens`, `next_output_tokens` — runs
+   through the *exact same* formula on that clamped value. This replaced an earlier hard
+   feasibility gate that returned `None`/`price_score = 0.0` for any candidate whose window
+   couldn't hold the estimated next call; that gate meant a large fraction of trajectories could
+   silently drop half the candidate pool instead of scoring it. The clamp keeps every candidate
+   priced on the same terms — a small-window model still gets its normal cache treatment (see
+   step 3), it just gets it on a capped input size, so it isn't artificially rewarded for having
+   less to bill.
 3. **Apply the cache trap to the remaining candidates:**
    - **HOLD** (`model.name == trajectory.served_model`): `already_cached_tokens` bills at
      `cached_input_price_per_1m`; everything else —
@@ -380,18 +385,20 @@ contract above carves out.
      — since neither pricing source discounts a freshly generated output token).
    - `cost = (uncached_tokens · input_price_per_1m + cached_tokens · cached_input_price_per_1m
      + next_output_tokens · output_price_per_1m) / 1e6`.
-4. **Normalize:** `price_score = (max_cost − cost) / (max_cost − min_cost)` over feasible
-   candidates; if every feasible candidate ties, all get `1.0`.
+4. **Normalize:** `price_score = (max_cost − cost) / (max_cost − min_cost)` over the whole candidate
+   pool; if every candidate ties, all get `1.0`.
 
 This reproduces the cache trap directly: a candidate with identical per-token rates to
 `served_model` scores strictly lower than holding, because a switch loses the cache discount on
 `already_cached_tokens`; a much cheaper candidate can still outscore holding if its base rate is
 low enough to absorb that reset penalty. With `total_cached_tokens = 0`, holding and switching to
-an identically-priced model cost exactly the same — there is no cache to lose. Covered by
-`tests/test_price_model.py` (full cache, partial cache, no cache, switching, the cache-aggregate
-cap, the feasibility gate, and a regression test pinning the `last_call_input_tokens` fix itself);
-verified against synthetic trajectories only, not yet against the real export (no chunk was
-available locally when this was written — see §3).
+an identically-priced model cost exactly the same — there is no cache to lose. Every candidate
+receives a `price_score` — none are excluded or forced to `0.0` — so `score_price`'s min-max range
+always spans the whole pool passed in. Covered by `tests/test_price_model.py` (full cache, partial
+cache, no cache, switching, the cache-aggregate cap, the context-window clamp, and a regression
+test pinning the `last_call_input_tokens` fix itself); verified against synthetic trajectories
+only, not yet against the real export (no chunk was available locally when this was written —
+see §3).
 
 **Known simplifications, stated rather than hidden:**
 - `increment_tokens` is a same-trajectory average (`last_call_input_tokens / total_calls`), not a
@@ -401,7 +408,10 @@ available locally when this was written — see §3).
 - The formula scores one hypothetical next call, not the rest of the trajectory to come — it
   matches the README's "model for the next message" framing (§1) but doesn't project multiple
   future calls or their compounding cache effects.
-- Feasibility is a hard cutoff (`0.0`) rather than a graduated penalty near the context limit.
+- Compaction is modeled as a size clamp only — real summarization has its own cost (a call to
+  compact the context) and loses information, neither of which this formula accounts for. It
+  assumes "fits after compacting" is free and lossless, which favors small-context candidates more
+  than reality would.
 - `total_cached_tokens` is still a whole-trajectory aggregate (see `Trajectory`'s field docstring
   and `CACHE_HIT_RATE` in `pre_processing/trajectory_analyzer.py`), just capped down to
   `last_call_input_tokens` before use — it is not itself re-derived as "the last call's own cache

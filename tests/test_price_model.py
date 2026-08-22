@@ -201,11 +201,27 @@ class TestNextCallCost(unittest.TestCase):
 
         self.assertIsNotNone(cost)
 
-    def test_infeasible_context_window_returns_none(self):
-        trajectory = make_trajectory(total_tokens=10_000, total_cached_tokens=0, total_calls=5)
-        tiny_model = make_model("tiny", context_window_size=100)
+    def test_context_bigger_than_window_gets_clamped_not_excluded(self):
+        # last_call_input_tokens (10,000) is bigger than the model's window (2,000) --
+        # assume it gets compacted down to the model's max, then price that clamped
+        # size with the same HOLD cache split as any other call. increment (1,000) is
+        # computed from the *unclamped* last_call_input_tokens/total_calls, per
+        # _next_call_tokens -- only the base itself gets clamped, not the increment.
+        trajectory = make_trajectory(
+            served_model="model-a",
+            total_calls=10,
+            last_call_input_tokens=10_000,
+            total_cached_tokens=1_500,
+            avg_output_tokens_per_call=0.0,
+        )
+        model = make_model("model-a", context_window_size=2_000)
 
-        self.assertIsNone(_next_call_cost(trajectory, tiny_model))
+        cost = _next_call_cost(trajectory, model)
+
+        # clamped base = min(10,000, 2,000) = 2,000; cached = min(1,500, 2,000) = 1,500;
+        # uncached = (2,000-1,500)+1,000 = 1,500.
+        expected = (1_500 * 2.0 + 1_500 * 0.2) / 1_000_000
+        self.assertAlmostEqual(cost, expected)
 
 
 class TestScorePrice(unittest.TestCase):
@@ -238,26 +254,34 @@ class TestScorePrice(unittest.TestCase):
         self.assertEqual(models[0].price_score, 1.0)
         self.assertEqual(models[1].price_score, 1.0)
 
-    def test_infeasible_candidate_scores_zero_and_does_not_compress_others(self):
+    def test_small_context_window_model_gets_real_score_not_forced_zero(self):
+        # A model too small to hold the estimated next call unclamped is no longer
+        # zeroed out -- it's priced on its clamped (compacted) size through the same
+        # formula as everyone else, and can land anywhere in the ranking on its own
+        # merits, including winning on price if billing less genuinely costs less.
         trajectory = make_trajectory(
             served_model="model-a",
-            total_tokens=10_000,
-            total_cached_tokens=1_800,
             total_calls=5,
             last_call_input_tokens=3_000,
+            total_cached_tokens=1_800,
+            avg_output_tokens_per_call=0.0,
         )
         models = [
-            make_model("model-a"),
-            make_model("model-b"),
-            make_model("tiny", context_window_size=100),
+            make_model("model-a"),  # holding, full context window
+            make_model("model-b"),  # switching, full context window
+            make_model("tiny", context_window_size=1_000),  # switching, clamped
         ]
 
         score_price(trajectory, models)
 
         by_name = {m.name: m.price_score for m in models}
-        self.assertEqual(by_name["tiny"], 0.0)
-        self.assertEqual(by_name["model-a"], 1.0)
-        self.assertEqual(by_name["model-b"], 0.0)
+        # model-a (hold): cached=min(1800,3000)=1800, uncached=(3000-1800)+600=1800
+        #   -> cost = (1800*2.0 + 1800*0.2)/1e6 = 0.00396
+        # model-b (switch, uncached): uncached = 3000+600=3600 -> cost = 0.0072
+        # tiny (switch, clamped to 1,000): uncached = 1000+600=1600 -> cost = 0.0032
+        self.assertAlmostEqual(by_name["tiny"], 1.0)  # cheapest: least to bill
+        self.assertAlmostEqual(by_name["model-a"], 0.81)
+        self.assertAlmostEqual(by_name["model-b"], 0.0)  # priciest
 
 
 if __name__ == "__main__":

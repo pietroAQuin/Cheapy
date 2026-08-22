@@ -65,22 +65,20 @@ def _next_call_tokens(trajectory: Trajectory) -> tuple[float, float, float]:
     return last_call_input_tokens, increment_tokens, next_output_tokens
 
 
-def _next_call_cost(trajectory: Trajectory, model: ModelLLM) -> float | None:
+def _next_call_cost(trajectory: Trajectory, model: ModelLLM) -> float:
     """ESTIMATE the USD cost of `model` serving this trajectory's next call.
 
-    Returns None if `model.context_window_size` can't hold the next call at all --
-    that candidate is infeasible, not merely expensive, and is handled separately. This
-    gate is now evaluated against `last_call_input_tokens` (the real next-prompt
-    estimate), not the whole trajectory's cumulative footprint, so a long trajectory no
-    longer trips it for a model that would comfortably serve the actual next call.
+    No candidate is ever excluded for having too small a context window. If
+    `last_call_input_tokens` is bigger than what `model` can hold, this assumes the
+    context gets compacted down to the model's max `context_window_size` before the
+    call is sent -- clamp the size, then price it with the exact same cache-aware
+    formula used for every other call, holding or switching alike.
     """
     last_call_input_tokens, increment_tokens, next_output_tokens = _next_call_tokens(
         trajectory
     )
+    last_call_input_tokens = min(last_call_input_tokens, float(model.context_window_size))
     next_input_tokens = last_call_input_tokens + increment_tokens
-
-    if next_input_tokens + next_output_tokens > model.context_window_size:
-        return None
 
     holding = model.name == trajectory.served_model
     if holding:
@@ -110,30 +108,17 @@ def score_price(trajectory: Trajectory, models: list[ModelLLM]) -> list[ModelLLM
 
     Higher is cheaper. Costs are estimated per `_next_call_cost` and min-max
     normalized across `models` — this trajectory's candidate pool only, per README
-    §5's "normalize within the candidate pool, not globally". Infeasible candidates
-    (next call wouldn't fit their context window) are scored 0.0 and excluded from the
-    min-max range so one unusable model doesn't compress everyone else's spread.
+    §5's "normalize within the candidate pool, not globally". Every candidate gets a
+    real cost (a too-small context window is compacted to fit, never excluded — see
+    `_next_call_cost`), so every model in the pool is part of the min-max range.
     """
-    costs: dict[str, float | None] = {
-        model.name: _next_call_cost(trajectory, model) for model in models
-    }
+    costs = {model.name: _next_call_cost(trajectory, model) for model in models}
 
-    feasible_costs = [cost for cost in costs.values() if cost is not None]
-    if not feasible_costs:
-        for model in models:
-            model.price_score = 0.0
-        return models
-
-    cheapest, priciest = min(feasible_costs), max(feasible_costs)
+    cheapest, priciest = min(costs.values()), max(costs.values())
     spread = priciest - cheapest
 
     for model in models:
         cost = costs[model.name]
-        if cost is None:
-            model.price_score = 0.0
-        elif spread == 0:
-            model.price_score = 1.0
-        else:
-            model.price_score = (priciest - cost) / spread
+        model.price_score = 1.0 if spread == 0 else (priciest - cost) / spread
 
     return models
