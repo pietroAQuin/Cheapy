@@ -1,0 +1,85 @@
+lets think about some changes: where did you found that 92% of the tokens are cached? is that used in the code? theoretically this insight comes from the trajectory analyzer, we dont need to think about that
+
+---
+
+Price scoring formula (implemented, router_models/price_model.py)
+score_price(trajectory, models) estimates the USD cost of each candidate serving the trajectory's next call, then min-max normalizes those costs into price_score ∈ [0, 1] across the candidate pool for this trajectory (cheapest → 1.0, priciest → 0.0). It reads only Trajectory fields plus one ModelLLM at a time — the only place it looks at trajectory.served_model is the hold/switch cache check below, which is the exception the shared contract above carves out.
+
+Shape the next call, from Trajectory fields alone:
+current_context_tokens = total_tokens − total_cached_tokens. By construction in trajectory_analyzer.analyze, this is the size of the prompt the last recovered call sent — i.e. exactly the prefix any next call, held or switched, has to resend. Recovering it this way means price_model.py never needs to know the CACHE_HIT_RATE assumption baked in upstream.
+increment_tokens = current_context_tokens / total_calls — an ESTIMATE of how much new content (tool outputs, replies, ...) a typical call in this trajectory appends, taken as the trajectory's own average per-call growth. The next call's actual new content is by definition not yet in the log, so this is the best available stand-in.
+next_output_tokens = avg_output_tokens_per_call (already excludes the trajectory's unobserved final output, per Trajectory's own field contract).
+Feasibility gate. If next_input_tokens + next_output_tokens (where next_input_tokens = current_context_tokens + increment_tokens) exceeds a candidate's context_window_size, that candidate can't serve the call at all — its cost is None, it is forced to price_score = 0.0, and it is excluded from the min-max range so one unusable model doesn't compress everyone else's spread.
+Apply the cache trap to the remaining candidates:
+HOLD (model.name == trajectory.served_model): current_context_tokens bills at cached_input_price_per_1m, only increment_tokens bills at input_price_per_1m.
+CHANGE (any other candidate): the switch resets the provider's cache, so the entire next_input_tokens bills at input_price_per_1m — none of it is cached.
+Either way, next_output_tokens bills at output_price_per_1m (cached_output_price_per_1m is 0.0 for every seeded model — see pre_processing/model_list.py — since neither pricing source discounts a freshly generated output token).
+`cost = (uncached_tokens · input_price_per_1m + cached_tokens · cached_input_price_per_1m
+next_output_tokens · output_price_per_1m) / 1e6`.
+Normalize: price_score = (max_cost − cost) / (max_cost − min_cost) over feasible candidates; if every feasible candidate ties, all get 1.0.
+This reproduces the cache trap directly: a candidate with identical per-token rates to served_model scores strictly lower than holding, because a switch loses the cache discount on current_context_tokens; a much cheaper candidate can still outscore holding if its base rate is low enough to absorb that reset penalty. Verified against synthetic trajectories, not yet against the real export (no chunk was available locally when this was written — see §3).
+
+Known simplifications, stated rather than hidden:
+
+increment_tokens is a same-trajectory average, not a real prediction of the next call's size; a trajectory with unusually front-loaded or back-loaded growth will be mis-estimated.
+The formula scores one hypothetical next call, not the rest of the trajectory to come — it matches the README's "model for the next message" framing (§1) but doesn't project multiple future calls or their compounding cache effects.
+Feasibility is a hard cutoff (0.0) rather than a graduated penalty near the context limit.
+
+---
+
+No — I'm not referring to the three simplifications at the bottom. I want to fix the cache logic in the actual price formula.
+
+The important issue is this:
+
+For HOLD, we should NOT assume that `current_context_tokens` is entirely cached.
+
+The next input consists of:
+
+```text
+current context
++ new content
+```
+
+Some portion of the current context is already cached, and that information already comes from the trajectory/analyzer. For HOLD, we should preserve exactly that existing cached portion:
+
+```text
+HOLD:
+already-cached tokens → cached input price
+everything else       → normal input price
+```
+
+For CHANGE:
+
+```text
+CHANGE:
+entire next input → normal input price
+```
+
+So if, for example:
+
+```text
+current_context_tokens = 10,000
+cached tokens          = 7,000
+increment_tokens       = 2,000
+next_input_tokens      = 12,000
+```
+
+then:
+
+```text
+HOLD:
+7,000 cached
+5,000 normal input
+
+CHANGE:
+12,000 normal input
+0 cached
+```
+
+The current logic appears to effectively treat the whole `current_context_tokens` as cached for HOLD, which is the issue I want to fix.
+
+Please inspect the `Trajectory` and `trajectory_analyzer` implementation to identify exactly where the existing cached-token information is stored/derived. Then modify `router_models/price_model.py` so that it uses that information rather than assuming the entire current context is cached.
+
+Also update the README's "Price scoring formula" section to describe the corrected behavior, and add/update tests for partial cache, full cache, no cache, and switching models.
+
+The `increment_tokens` simplification can remain unchanged for now. I don't want to change that part yet.
