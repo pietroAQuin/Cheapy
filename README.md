@@ -57,7 +57,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 ./run_simul.sh path/to/trajectories.jsonl --w-cost 0.10 --w-performance 0.90
 
 # the headline cost figure, against every baseline policy
-PYTHONPATH=src .venv/bin/python research/legacy/benchmark.py path/to/trajectories.jsonl
+./run_benchmark.sh path/to/trajectories.jsonl
 ```
 
 ~17 s for 1,000 trajectories. Full design and every number above:
@@ -80,6 +80,24 @@ directory of them, or nothing (defaults to `data/`):
 
 `--verbose` prints every candidate ranked by final score, with `price_score` and
 `performance_score` beside it and the incumbent marked — the whole board behind each verdict.
+
+## Benchmark
+
+`./run_benchmark.sh` (wraps [`research/legacy/benchmark.py`](research/legacy/benchmark.py), same
+venv-detection pattern as `run_simul.sh`) compares the router's total cost against four baseline
+policies — always-cheapest, always-strongest, always-hold (today's incumbent), and random routing
+— over every trajectory in the dataset:
+
+```bash
+./run_benchmark.sh path/to/trajectories.jsonl   # one export
+./run_benchmark.sh path/to/exports/             # every *.jsonl in a directory
+./run_benchmark.sh --limit 5                    # quick run
+```
+
+Same file/directory resolution as `run_simul.sh` (defaults to `export/`, falls back to `data/`;
+a directory routes every `*.jsonl` chunk in it, not just the first). Writes
+`results/total_cost.png` (log-scale bar chart) and `results/benchmark_trajectories.csv`
+(per-trajectory cost breakdown), and prints a cost-savings summary to stdout.
 
 ## Configure
 
