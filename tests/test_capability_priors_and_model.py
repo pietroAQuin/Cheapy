@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from analysis.complexity_model.priors import (
+from cheapy.capability.priors import (
     BASE_CAPABILITY,
     CANDIDATES,
     NEAR_UNMEASURED,
@@ -13,8 +13,8 @@ from analysis.complexity_model.priors import (
     prior_for,
     weights,
 )
-from analysis.complexity_model.capability_model import score_for_trajectory, score_models
-from pre_processing.trajectory_analyzer import analyze
+from cheapy.capability.capability_model import score_for_trajectory, score_models
+from cheapy.preprocessing.trajectory_analyzer import analyze
 
 
 class TestPriors:
@@ -75,7 +75,7 @@ class TestScoreModelsStubMode:
     def test_beta_zero_ranks_flat_under_the_symmetric_stub(self, trajectory, monkeypatch):
         # Force stub mode explicitly: a fitted artifact may or may not be present in the
         # working tree, and this test is about the stub's shape, not the fitted model's.
-        import analysis.complexity_model.capability_model as cm
+        import cheapy.capability.capability_model as cm
 
         monkeypatch.setattr(cm, "_load", lambda: None)
         scores = cm.score_models(trajectory, beta=0.0)

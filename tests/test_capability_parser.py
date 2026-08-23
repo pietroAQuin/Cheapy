@@ -1,9 +1,9 @@
 """§3 response classification: malformed / message / tool_call, per provider."""
 from __future__ import annotations
 
-from analysis.complexity_model.canonical import ToolDef
-from analysis.complexity_model.parser import classify_calls, parse_anthropic, parse_openai
-from analysis.complexity_model.scoring import ActionType
+from research.capability_fitting.canonical import ToolDef
+from research.capability_fitting.parser import classify_calls, parse_anthropic, parse_openai
+from research.capability_fitting.scoring import ActionType
 
 BASH = ToolDef(
     name="bash",

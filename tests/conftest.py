@@ -2,7 +2,7 @@
 
 The real export (`data/*.jsonl`) is gitignored and not present in the repo, so every
 test here builds minimal synthetic records by hand instead of reading it. Records
-follow the two encodings documented in `pre_processing/trajectory_analyzer.py`.
+follow the two encodings documented in `src/cheapy/preprocessing/trajectory_analyzer.py`.
 """
 from __future__ import annotations
 

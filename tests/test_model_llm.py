@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from data_models.model_llm import ModelLLM
+from cheapy.models.llm import ModelLLM
 
 PRICE_FIELDS = dict(
     input_price_per_1m=3.0,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 
-from analysis.complexity_model.sampler import MAX_PREFIX_TOKENS, _call_starts, sample_cut
+from research.capability_fitting.sampler import MAX_PREFIX_TOKENS, _call_starts, sample_cut
 
 
 def _record(n_calls: int) -> dict:
@@ -50,7 +50,7 @@ class TestSampleCut:
         assert a.step_id == b.step_id  # same trajectory id + same rng draw -> same key
 
     def test_oversized_prefix_is_excluded(self, monkeypatch):
-        import analysis.complexity_model.sampler as sampler_module
+        import research.capability_fitting.sampler as sampler_module
 
         monkeypatch.setattr(sampler_module, "MAX_PREFIX_TOKENS", 1)  # force the filter to trip
         record = _record(5)

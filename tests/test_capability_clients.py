@@ -10,7 +10,7 @@ import httpx
 import openai
 import pytest
 
-from analysis.complexity_model.clients import OpenAIClient, RetryableError
+from research.capability_fitting.clients import OpenAIClient, RetryableError
 
 
 def _status_error(code: int) -> openai.APIStatusError:

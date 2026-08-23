@@ -5,10 +5,10 @@ absent vs failed distinguishability, and that a restart never re-issues a comple
 """
 from __future__ import annotations
 
-from analysis.complexity_model.clients import QueryResult
-from analysis.complexity_model.elicit import load_store, run_elicitation
-from analysis.complexity_model.priors import PROBES
-from analysis.complexity_model.sampler import Sample
+from research.capability_fitting.clients import QueryResult
+from research.capability_fitting.elicit import load_store, run_elicitation
+from cheapy.capability.priors import PROBES
+from research.capability_fitting.sampler import Sample
 
 
 def _sample(step_id: str) -> Sample:

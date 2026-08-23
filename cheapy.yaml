@@ -1,0 +1,32 @@
+# Cheapy simulation settings.
+#
+# These four weights/assumptions are everything the router lets you dial. They apply to
+# `./run_simul.sh` and to `python src/cheapy/cli.py` alike. Every value here can be
+# overridden per-run by the matching command-line flag:
+#
+#     ./run_simul.sh --w-cost 0.7 --w-performance 0.3 --verbose
+#
+# Precedence: command-line flag > this file > built-in default.
+# Full rationale for each: docs/FULL_REPORT.md §5 (scoring) and §6 (capability model).
+
+# Weight on price_score in the final score. Higher = cheaper picks.
+# Only the ratio W_COST : W_PERFORMANCE matters; they are normalized by their sum.
+W_COST: 0.1
+
+# Weight on performance_score in the final score. Higher = more capable picks.
+W_PERFORMANCE: 0.9
+
+# Conformity weighting of the capability model: w_i = prior_i ** BETA.
+# 0 = ignore the quality prior entirely (pure agreement between models);
+# 3 = the fitted default; larger values approach "trust only the strongest model".
+BETA: 3.0
+
+# Fraction of a call's shared prompt prefix assumed to be served from the provider's
+# cache. 1.0 is the optimistic bound (perfect prefix cache, no TTL); 0.0 prices every
+# call as if nothing were cached. Drives the cost estimate, not the routing logic.
+CACHE_HIT_RATE: 1.0
+
+# Print the full scoreboard for every trajectory (all candidates ranked, with
+# price_score and performance_score), instead of only the run summary.
+# Off by default: the export is 1,000 trajectories.
+VERBOSE: false

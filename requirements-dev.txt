@@ -1,12 +1,16 @@
 pytest
 
-# pre_processing/trajectory_analyzer.py's tokenizer (already a runtime dependency;
-# listed here since this file is the only one pip-installed for the pipeline+tests).
+# cheapy.yaml — read by src/cheapy/config.py on every CLI run.
+pyyaml
+
+# src/cheapy/preprocessing/trajectory_analyzer.py's tokenizer (already a runtime
+# dependency; listed here since this file is the only one pip-installed for the
+# pipeline + tests).
 tiktoken
 
-# analysis/complexity_model/ — offline pipeline + the shipped capability_model.py.
-# Never imports the anthropic/openai SDKs (those are requirements-elicit.txt, only
-# needed to run the elicitation pilot itself).
+# src/cheapy/capability/ — the shipped capability model — and the offline pipeline that
+# fitted it (research/capability_fitting/). Never imports the anthropic/openai SDKs
+# (those are requirements-elicit.txt, only needed to run the elicitation pilot itself).
 numpy
 scikit-learn
 jsonschema

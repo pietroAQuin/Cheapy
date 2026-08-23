@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from analysis.complexity_model.scoring import (
+from research.capability_fitting.scoring import (
     Action,
     ActionType,
     all_malformed,

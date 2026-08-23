@@ -1,4 +1,4 @@
-"""Unit tests for router_models/price_model.py.
+"""Unit tests for src/cheapy/routing/price_model.py.
 
 Plain `unittest` (stdlib) rather than pytest, to keep the pipeline runnable offline
 with no extra dependency — consistent with the README's "offline on a laptop" contract.
@@ -12,11 +12,11 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from data_models.model_llm import ModelLLM
-from data_models.Trajectory import Trajectory, ViktorEnvironment
-from router_models.price_model import _next_call_cost, score_price
+from cheapy.models.llm import ModelLLM
+from cheapy.models.trajectory import Trajectory, ViktorEnvironment
+from cheapy.routing.price_model import _next_call_cost, score_price
 
 
 def make_model(name: str, **overrides) -> ModelLLM:
