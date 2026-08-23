@@ -112,18 +112,30 @@ the same contract and a term in `model.py`'s average.
 | `pre_processing/model_list.py` | Builds the candidate pool | **implemented** (static pool + real pricing; no scoring — that's `router_models/`'s job) |
 | `pre_processing/trajectory_analyzer.py` | Parses one JSON line into a `Trajectory` | **implemented** |
 | `router_models/price_model.py` | Assigns `price_score` | **empty stub** |
-| `router_models/performance_model.py` | Assigns `performance_score` | **empty stub** |
+| `router_models/performance_model.py` | Assigns `performance_score` | **implemented** — thin adapter onto `analysis/complexity_model/` |
 | `router_models/model.py` | Weighted aggregation, ranking, HOLD/CHANGE decision | **empty stub** |
+| `analysis/complexity_model/` | Offline pairwise-agreement pipeline + the shipped `capability_model.py` — see its `complexity_scoring_spec.md` | **implemented and fitted** on a 947-step run over the export |
 | `data/` | The redacted export (gitignored, challenge-use only) | present locally |
 | `code_agent_utils/` | Organizers' briefing + `/setup`, `/make-presentation`, `/prepare-submission` skills | supplied |
-| `tests/` | Unit tests for the implemented modules, against hand-built fixtures (not the export) | covers `data_models/`, `pre_processing/` |
+| `tests/` | Unit tests for the implemented modules, against hand-built fixtures (not the export) | covers `data_models/`, `pre_processing/`, `analysis/complexity_model/` |
 
 `data_models/model_llm.py`, `data_models/Trajectory.py`, `pre_processing/model_list.py`, and
 `pre_processing/trajectory_analyzer.py` are implemented and cross-checked against the export —
-treat their contracts as real. Every file under `router_models/` is still a **zero-byte
-placeholder**: the structure is decided, those implementations are not. Nothing yet wires the
-implemented pre-processing stage into a scoring stage — you are not breaking an existing
-contract, you are writing the first one.
+treat their contracts as real. `router_models/price_model.py` and `router_models/model.py` are
+still **zero-byte placeholders**. `router_models/performance_model.py` is implemented and backed
+by a fitted model: the pipeline in `analysis/complexity_model/` was run end-to-end over **947 of
+the 957 eligible trajectories** (10 dropped to content-policy refusals), eliciting the 3 OpenAI
+probes on each and recovering the served model's logged action, for **10,882 measured ordered
+pairs covering 42 of 72 ordered cells**. `artifacts/pair_model.json` is the fitted result and
+`capability_model.py` loads it automatically; inference needs no network and no keys.
+
+**Read the honest scorecard before quoting any number from it** — see the REVISION header of
+`analysis/complexity_model/complexity_scoring_spec.md`. In short: the model beats the
+constant-predictor baseline on the main gate and on all three leave-one-probe-out splits, but
+only weakly (per-row R² ≈ 0.014; step-level Spearman ≈ 0.20; the steps it calls most contested
+average 0.658 agreement against 0.846 for the least). Roughly 53% of the target variance sits
+between steps and is in principle reachable, so most of the available signal is *not* being
+captured by the current prefix features.
 
 Run the suite with `pip install -r requirements-dev.txt && python -m pytest`. Tests build their
 own synthetic trajectory lines (both encodings) in `tests/conftest.py` rather than reading
@@ -260,9 +272,10 @@ need. Reaching for it in a *score* is the mistake.
 
 ## 5. Scoring
 
-> **Both scoring criteria are undefined as of this writing.** This section records the
-> constraints any implementation must respect, not a design that has been agreed. When you
-> settle one, write it here.
+> **`price_score` is still undefined.** `performance_score` is now settled and implemented —
+> see `analysis/complexity_model/complexity_scoring_spec.md` for the full design and the
+> "### Performance" note below for the summary. This section otherwise records constraints
+> any implementation must respect.
 
 ### Shared contract
 
@@ -318,6 +331,35 @@ need. Reaching for it in a *score* is the mistake.
 
 ### Performance
 
+> **Implemented** as a pairwise-agreement model — see
+> `analysis/complexity_model/complexity_scoring_spec.md` (read its REVISION header first)
+> and `analysis/complexity_model/` for the pipeline.
+>
+> Cut a trajectory mid-flight and ask: how much would two models' *next actions* differ?
+> Per-model scores are prior-weighted conformity over those pairwise values, so on a step
+> where every model does the same thing all scores go to 1.0, the capability gap closes, and
+> the router decides on cost alone.
+>
+> **Only OpenAI credits are available**, so just 3 of the 9 candidates can be queried. The
+> other 6 are not guessed at from their benchmark score — that approach was tried and
+> provably collapses to ranking models by prior-centrality, identically on every step.
+> Instead their **real next actions are recovered from the corpus**: every line carries
+> `model` plus the full action log, so at any interior cut the served model's actual next
+> action is already there. That measures **21 of 36 model pairs at zero extra API cost**;
+> the remaining 15 (Claude vs Claude, structurally unobservable since one model serves a
+> whole trajectory) are Nyström-completed from the measured columns and flagged
+> `extrapolated`. A ridge/logit model then learns prefix-features → agreement, so
+> `capability_model.py` reproduces the scores at inference with **zero API calls**.
+>
+> Three measured findings worth carrying into any writeup: none of the probes accepts
+> `temperature=0`, so every measurement carries sampling noise; measured **self**-agreement
+> is **0.773–0.890** depending on the probe (§6), which is the ceiling on any agreement
+> figure here — an earlier 25-step pilot put it at 0.74, superseded by the shipped
+> artifact's 50-step control; and two encoding quirks
+> (Claude preamble beside tool calls, GPT stop-turns logged as empty messages) each produce
+> a ~5× spurious provider gap if parsed naively — i.e. they are `served_model` in disguise.
+> `parser.classify_run` is the single rule that neutralises both.
+
 - No quality labels exist in the export. Any performance score is a **proxy** — derive it from
   observable structure (platform inferred from the toolset, trajectory length, tool-call density,
   error and retry patterns in tool outputs), or from judge-model rescoring of individual calls.
@@ -342,7 +384,216 @@ how the cost–quality frontier gets produced, and the frontier is the headline 
 
 ---
 
-## 6. Evaluating the router (the hard part)
+## 6. The capability model (how `performance_score` is computed)
+
+Implemented in `analysis/complexity_model/`, exposed to the router through
+`router_models/performance_model.py`. Full design notes live in
+`analysis/complexity_model/complexity_scoring_spec.md`.
+
+### The idea, in plain terms
+
+We have no answer key. Nothing in the dataset says "this was a good next move" — so we can
+never directly measure whether a model is *right*.
+
+What we can do is **ask a panel and see who agrees with whom.**
+
+Picture a task paused halfway through. We show the same half-finished work to nine
+different models and ask each one: *what would you do next?* Then we compare the answers.
+
+- If **everybody proposes the same next move**, the step is easy. No model has an edge, so
+  they all score near 1.0 — and the router should just pick the cheapest one.
+- If **the answers scatter**, the step is genuinely hard. Now it matters who you side with,
+  and we reward agreeing with the models we have good reason to trust.
+
+That's the whole idea: **a model's score is how much of the panel agrees with it, where the
+smarter panel members' agreement counts for more.** The score always lands between 0 and 1.
+
+The gap between the best and worst score is a useful by-product: it tells the router *how
+much this decision matters here*. A narrow gap means "anyone can handle this." A wide gap
+means "this one is worth paying for."
+
+### How it actually works
+
+**Done once, offline:**
+
+1. **Cut 957 real trajectories mid-task.** Everything before the cut is the "prefix" — what
+   the agent had seen so far.
+2. **Ask the three probe models what to do next.** Only OpenAI credits are available, so
+   `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna` are the only models we can query.
+3. **Get the other six models' answers for free.** Every line in the export records which
+   model served it *and* its full action log — so at any interior cut, the real next action
+   of the model that served that trajectory is already sitting in the data. No API call
+   needed.
+4. **Compare every pair of answers.** Same action type and same tools → 1.0. Different
+   action types → a value from a fixed table. Same type but only partly overlapping tools →
+   scored by how much the tool sets overlap.
+5. **Learn the pattern.** Fit a model that predicts "how much will these two agree?" from
+   cheap properties of the prefix (how many calls so far, the mix of tools used, whether the
+   cut lands right after a user message, signs of recent errors) plus a description of the
+   two models being compared. The result is saved to `artifacts/pair_model.json`.
+
+**Then at runtime, per trajectory — no API calls, a few milliseconds:**
+
+Read the prefix, predict how much each pair of models would agree, and combine:
+
+```
+score(i) = ( w_i  +  Σ_{j≠i} w_j · agreement(i, j) )  /  Σ_all w_j
+
+where   w_i = base_capability(i) ** 3
+```
+
+In words: **the weighted share of the panel that agrees with model i.** The `w_i` in the
+numerator is the model agreeing with itself, which keeps the result inside [0, 1] and stops
+a model being penalised for its own vote.
+
+### Quality metrics — the honest numbers
+
+Everything below comes from the shipped artifact (`artifacts/pair_model.json`), measured
+with **5-fold `GroupKFold` grouped by step**, so no step ever appears in both the training
+and test halves.
+
+| | |
+|---|---|
+| Trajectory cuts used | **947** (of 957 sampled; 10 incomplete) |
+| Pairwise comparisons (rows) | **10,882** |
+| Cross-validation | 5-fold, grouped by step |
+| Model MSE | **0.16893** |
+| Baseline MSE (predict the mean, always) | 0.17135 |
+| **R²** | **+0.0141** (1.4%) |
+| Beats baseline | ✅ yes |
+
+**Read that R² honestly: it is small.** The model explains about **1.4%** of the variation
+in pairwise agreement. It is a real, reproducible improvement over guessing the average —
+but it is not a strong predictor, and nothing in this repo should be presented as if it
+were.
+
+The main reason is the shape of what we're predicting:
+
+| target value | share of rows |
+|---|---|
+| exactly 1.0 (full agreement) | **69.2%** |
+| exactly 0.0 (total disagreement) | **20.9%** |
+| anything in between | 9.9% |
+
+Mean 0.7358, standard deviation 0.4139. Ninety percent of the target is a coin-flip-like
+bit — "same action or not" — and much of that is genuinely unpredictable from the prefix
+alone. There is a hard ceiling on how much any model could explain here.
+
+**Held-out generalisation (leave-one-probe-out).** Fit on two probes, predict the third —
+a probe never seen during training. All three beat their baseline:
+
+| held-out probe | test MSE | baseline MSE | R² |
+|---|---|---|---|
+| `gpt-5.6-sol` | 0.16110 | 0.16229 | **+0.007** |
+| `gpt-5.6-terra` | 0.16036 | 0.16621 | **+0.035** |
+| `gpt-5.6-luna` | 0.16770 | 0.17237 | **+0.027** |
+
+Small, but positive in every case — the model is learning something transferable, not
+memorising probes.
+
+**Measurement noise floor.** None of the probes accepts `temperature = 0`, so asking the
+same model the same question twice does *not* give the same answer. Measured self-agreement:
+
+| probe | self-agreement |
+|---|---|
+| `gpt-5.6-sol` | 0.860 |
+| `gpt-5.6-terra` | 0.773 |
+| `gpt-5.6-luna` | 0.890 |
+
+**This is the ceiling on every agreement number in this repo.** A pair scoring 0.85 is not
+"85% similar" — it is at roughly the level two runs of the *same model* reach.
+
+**Pair coverage.** 21 of the 36 model pairs are measured (42 of 72 ordered cells), backed by
+10,882 observations — but they are unevenly supported: the best-covered cell has **1,168**
+observations, the worst has **1**. The remaining 15 pairs (Claude vs Claude) are
+reconstructed, never observed. `ModelScore.measured_fraction` reports the split per model:
+**1.0 for the three probes, 3/8 for the six Anthropic candidates.**
+
+**One calibration check failed, and it is not silently ignored.** The logged-vs-elicited
+offset δ — the part of disagreement caused by *how* an action was collected rather than by
+model identity — was estimated three times independently:
+
+| probe | δ |
+|---|---|
+| `gpt-5.6-terra` | −0.0947 |
+| `gpt-5.6-luna` | −0.0175 |
+| `gpt-5.6-sol` | +0.0298 |
+
+Spread **0.1245**, above the 0.10 consistency threshold, so `is_consistent = False` and
+**no correction is applied.** The three estimates disagree — including on sign — so
+correcting would inject noise dressed as a fix. The gap is reported instead. This is a known
+open weakness, not a solved problem.
+
+### Design decisions worth knowing
+
+**Why not just use published benchmark scores for the six models we cannot query?** It was
+tried, and it provably collapses. Substituting a prior-distance function into the score
+formula makes the step-dependent term factor out entirely, producing an **identical ranking
+on all 947 steps** — and one that ranks models by how *central* their benchmark score is,
+penalising the strongest model for being an outlier. Recovering real logged actions from the
+corpus instead took pair coverage from 3/36 to **21/36 at zero extra API cost**.
+
+**Why β = 3 and not 1?** β controls how much a model's benchmark prior weights its vote
+(`w_i = prior_i ** β`). The design has two intents, and at β = 1 only one of them held.
+Measured over 200 trajectories:
+
+| β | ρ(score ranking, benchmark prior) on contested steps | top model on contested steps |
+|---|---|---|
+| 0 | 0.20 | `gpt-5.6-sol` |
+| 1 | 0.52 | `gpt-5.6-sol` |
+| 2 | 0.70 | `gpt-5.6-sol` |
+| **3** | **0.73** | **`claude-fable-5`** |
+| 5 | 0.75 | `claude-fable-5` |
+
+At β = 1 the model rewarded for conformity was `gpt-5.6-sol` — a **mid-prior** model
+(0.7274, against `claude-fable-5`'s 0.9559) that wins simply by sitting at the centre of an
+all-GPT probe panel. β = 3 is the lowest value at which the strongest model actually tops
+the ranking when it matters, without flattening the score into the prior.
+
+Both intended behaviours hold at β = 3, measured:
+
+| | spread (best − worst) | lowest score |
+|---|---|---|
+| settled steps (top quartile by agreement) | 0.088 | 0.795 |
+| contested steps (bottom quartile) | 0.168 | — |
+
+Agreement compresses the field; disagreement fans it out by capability. That ~2× ratio is
+the signal the router consumes.
+
+**Why the parsing rule matters more than it sounds.** Two encoding quirks each manufacture a
+roughly **5× fake gap between providers** if parsed naively — Claude puts preamble text in
+assistant messages next to tool calls, GPT logs stop-turns as empty messages. Either one is
+`served_model` in disguise, which would turn the whole model into a provider classifier.
+`parser.classify_run` is the single shared rule applied to both the elicited and the logged
+path, which neutralises both.
+
+**The score never reads `served_model`** — not as a feature, not indirectly through any of
+the five proxies listed in §4. That leak would make the router predict the log instead of
+improving on it.
+
+### Known limitations
+
+- **R² is 1.4%.** Real, reproducible, and small. The per-pair prediction is weak; the router
+  consumes the *aggregate* spread across nine models, which averages many pair predictions
+  and is steadier than any single one — but this should never be described as a strong model.
+- **The 15 Claude-vs-Claude pairs can never be validated.** No trajectory is served by two
+  models, so no data exists that could check them. They are capped at rank 3 by having only
+  three probes, and flagged `extrapolated`.
+- **The whole panel is GPT.** GPT-vs-GPT agreement (0.762) runs higher than Claude-vs-GPT
+  (0.694), so conformity scoring structurally favours GPT. Raising β to 3 compensates; it
+  does not remove the cause.
+- **`claude-opus-4-6` and `claude-sonnet-4-6` served 2 and 1 trajectories.** Their scores
+  rest on roughly one task each. They carry a `near_unmeasured` flag and must stay out of
+  headline claims.
+- **δ is unresolved** (above), so no logged-vs-elicited correction is applied.
+- **Changing `BASE_CAPABILITY` requires a retrain.** The priors feed both the runtime weights
+  *and* five of the fitted model's features, so editing them puts the saved artifact out of
+  sync with the features it scores. β alone is free to change — it is applied after the
+  regressor.
+
+---
+
+## 7. Evaluating the router (the hard part)
 
 The log shows only the model that actually ran. Estimating what a *different* route would have
 cost or delivered is off-policy evaluation, and it is the depth of this challenge — matching or
@@ -354,7 +605,7 @@ claim, and one known weakness.
 
 ---
 
-## 7. Conventions for agents working here
+## 8. Conventions for agents working here
 
 - **This README is the spec.** New stage, new module, changed contract — update the relevant
   section in the same commit. The next agent has no other design doc to read.
@@ -371,7 +622,7 @@ claim, and one known weakness.
 
 ---
 
-## 8. Open decisions
+## 9. Open decisions
 
 Live list — resolve, then fold the answer into the sections above.
 
