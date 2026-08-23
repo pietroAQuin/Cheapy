@@ -1,0 +1,152 @@
+judge my cost score strategy
+
+---
+
+why do i need the min when calculating the cached tokens? cant I just make it to the cached tokens prvious set by the trajectory analyzer?
+
+---
+
+okay. but the calculations are correct?
+
+---
+
+does it make senseß
+
+---
+
+but every time you send a message you have to resend everything, so isnt that right?
+
+---
+
+okay. lets fix it
+
+---
+
+commit and push
+
+---
+
+now lets fix the following thing. if the context is bigger than the context window of a model we assume the the context was compacted to the models maximum capacity, so that we dont have to ignore these models.
+
+---
+
+we should never return none. so for example, if the context window ever gets bigger than the maximum context window for the model we just clamp it, because we assume that this window will be compressed to its maximum sozs
+
+---
+
+dont set its model price to 1. think. its the same formula, but when the context gets bigger than the maximum accepted clamp it to the maximum
+
+---
+
+try again
+
+---
+
+what do you mean by if spread == 0? when is that the case?
+
+---
+
+okay so keep it and end your changes
+
+---
+
+update the readme also
+
+---
+
+commit and push
+
+---
+
+lets do the following. for the quality we need a base value, because if all models have different answers, we need a value we can rely on. so create a new file in the data_model folder called quality_base_value.py. it should contain 4 dictionaries, one with qualitiy value of the models from the following benchmark: https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index; then from https://arena.ai/leaderboard/agent and from https://arena.ai/leaderboard/text. then the fourth dictionary contain a value from 0-1 with 1 being the model with the best scores in the benchmarks. keep in mind that all benchmarks should have the same weight. Also update our readme in the  part of the quality score saying that we have a base score in case all models have different answers. Also read this to contextualize yourself: We assign each LLM a quality score in [0, 1] used for model selection/weighting. The score is derived from existing public benchmarks (not our own vibes) so it's reproducible and defensible. It reflects peak capability (highest effort setting available per model).
+
+Sources. We aggregate three independent leaderboards, each measuring a different axis of "quality":
+
+Artificial Analysis Intelligence Index (v4.1.1) — https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index
+Automated capability benchmark. AA runs 9 fixed evaluations itself (GDPval-AA, Terminal-Bench, SciCode, Humanity's Last Exam, GPQA Diamond, CritPt, τ³-Banking, AA-Omniscience, AA-LCR) under standardized conditions, scores pass@1, and takes a weighted average scaled 0–100. Weighting is agentic-heavy: 34% agents, 24% coding, 24% scientific reasoning, 18% general. Answers the question: does it solve hard, verifiable tasks?
+Agent Arena — https://arena.ai/leaderboard/agent
+Real-world agentic performance. No voting. Every live "Agent Mode" session (with terminal/web/filesystem tools) is routed to a randomly chosen model, creating a randomized controlled trial. Causal inference ("causal tracing") then estimates each model's treatment effect vs. the average model across 5 signals (confirmed success, praise vs. complaint, steerability, bash recovery, tool hallucination). The headline metric is Net Improvement (percentage points vs. average). Answers: does using this model make real work turn out better?
+Text Arena / LMArena — https://arena.ai/leaderboard/text
+Human preference. Users get two anonymous responses to a live prompt and vote for the better one; scores come from a Bradley-Terry model with style control (removes the advantage of longer/prettier answers). Answers: do humans prefer its responses?
+
+Why these three. They're not redundant — they measure partially independent things, and they disagree in informative ways (e.g., older Opus ranks below newer models on AA capability but above them on human preference). Three benefits:
+
+Coverage: capability, real-world outcomes, and subjective preference are all part of "quality"; no single board captures all three.
+Error cancellation: each board has its own bias (AA can be over-fit/STEM-heavy, Text rewards likeability, Agent reflects Arena's user mix). Because the biases differ, averaging dilutes the noise and reinforces the shared "real quality" signal.
+Hard to game: a model can spoof one number, but the exploits differ across boards — leading all three requires being genuinely good at all three.
+
+---
+
+wait. why is the value for fable 1? the final value should be calculated with an weighted average using the values from the benchmarking. dont normalize it at the end
+
+---
+
+how did you calculate the final values? what was the formula? because the values from the bechmarkings didnt go from 0 to 1
+
+---
+
+commit and push it
+
+---
+
+download all dependencies an run the benchmark script
+
+---
+
+<task-notification>
+<task-id>b2id4bcgv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>C:\Users\jonny\AppData\Local\Temp\claude\C--Users-jonny-Documents-agentic-hackathon\f2f52d5c-8e84-4e25-ad92-8d33ed6743e0\tasks\b2id4bcgv.output</output-file>
+<status>completed</status>
+<summary>Background command "Install dev requirements plus matplotlib" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+in our readme we described our current problem. the scores are not well balenced. so the price scores from the models differs a lot, while the performance score are very similar. so at the end we always end up picking the cheapest model. what are possible ways to fix it? we also wanted to keep in mind that models that answer similar shouldnt be strongly penalized
+
+---
+
+explain the first one better
+
+---
+
+i didnt understand exactly what we are changing. price os qulity score? how?
+
+---
+
+do it. do not commit it yet
+
+---
+
+run the run_simul.sh
+
+---
+
+Any updates
+
+---
+
+<task-notification>
+<task-id>bi4t3ifgo</task-id>
+<tool-use-id>toolu_01VQ15uRyp9fCnTt4wVwudSw</tool-use-id>
+<output-file>C:\Users\jonny\AppData\Local\Temp\claude\C--Users-jonny-Documents-agentic-hackathon\f2f52d5c-8e84-4e25-ad92-8d33ed6743e0\tasks\bi4t3ifgo.output</output-file>
+<status>failed</status>
+<summary>Background command "Install project dependencies into the venv (foreground, to see errors)" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+try it with price exponent = 0.3 and weight cost = 0.5
+
+---
+
+now with wiehgt cost = 0.1  and price exponent = 0.3
+
+---
+
+now with price exponent = 0.2
+
+---
+
+okay so set it to 0.25 commit and push it. int the commit feature state it to reweighting variables
