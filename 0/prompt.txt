@@ -1,0 +1,49 @@
+lets think about a smart way of doing the benchmark, something that actually shows our router is useful. It has to be in graph format
+
+---
+
+delete the "same quality, lower cost..." and make hold policy stay near its point in the graph, check if it is readable. The bar chart is impossible to read, fix it and check if text dont overlap before handing me the new graph
+
+---
+
+the bar chart doesnt need to have w = 0.1, because it it the same thing as always cheap. The price is also overlapping in always cheap, push it up a bit
+
+---
+
+in the frontier graph take away the CLI, it doesnt look clean. Also calculate using all data that we have
+
+---
+
+is there any way to make the bar chart better? Is w= 1.0 the best way to show our router?
+
+---
+
+yes
+
+---
+
+now explain what we can see in the graphs, how to interpret it
+
+---
+
+in the frontier.png, the line actually goes past 0.8, where always strongest is. Is this an error or should it be like this? Shouldnt it sit at 1.0?
+
+---
+
+so is it better to change the labels on the graph to make it more understandable?
+
+---
+
+how do you plot this graph? How do you make the line
+
+---
+
+how does this dedupe and pareto_efficient thing work? explain in a simple way
+
+---
+
+cant we use this same logic to plot how much our router would spend on each trajectory instead of changing the weight? we can fix the weight at 0.1 and show that our router is good. Or is this a bad idea
+
+---
+
+yes, if i think it looks bad you just reverse it
