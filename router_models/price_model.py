@@ -103,22 +103,40 @@ def _next_call_cost(trajectory: Trajectory, model: ModelLLM) -> float:
     return input_cost + output_cost
 
 
-def score_price(trajectory: Trajectory, models: list[ModelLLM]) -> list[ModelLLM]:
-    """Enrich each `ModelLLM` in `models` with a `price_score` in `[0, 1]`.
+def estimate_costs(trajectory: Trajectory, models: list[ModelLLM]) -> dict[str, float]:
+    """ESTIMATE the USD cost of each candidate in `models` serving the trajectory's next
+    call, keyed by model name — see `_next_call_cost`.
 
-    Higher is cheaper. Costs are estimated per `_next_call_cost` and min-max
-    normalized across `models` — this trajectory's candidate pool only, per README
-    §5's "normalize within the candidate pool, not globally". Every candidate gets a
-    real cost (a too-small context window is compacted to fit, never excluded — see
-    `_next_call_cost`), so every model in the pool is part of the min-max range.
+    Public so callers other than `score_price` -- e.g. a benchmark comparing policies by
+    actual dollar cost rather than the normalized `price_score` -- can get the same
+    per-candidate cost figures `score_price` normalizes, without duplicating the
+    cache-trap cost logic in `_next_call_cost`.
     """
-    costs = {model.name: _next_call_cost(trajectory, model) for model in models}
+    return {model.name: _next_call_cost(trajectory, model) for model in models}
 
-    cheapest, priciest = min(costs.values()), max(costs.values())
-    spread = priciest - cheapest
+
+def score_price(trajectory: Trajectory, models: list[ModelLLM]) -> list[ModelLLM]:
+    """Enrich each `ModelLLM` in `models` with a `price_score` in `(0, 1]`.
+
+    Higher is cheaper. Costs are estimated per `_next_call_cost` (via `estimate_costs`)
+    and scored as a ratio to the *cheapest* candidate in this trajectory's candidate
+    pool — per README §5's "normalize within the candidate pool, not globally" — rather
+    than min-max stretched across the pool's full price range. A candidate priced at `k`
+    times the cheapest one scores `1/k`: a candidate only marginally above the cheapest
+    price lands close to `1.0`, not at the same `0.0` floor a wildly pricier candidate
+    would get under min-max. It also depends only on the cheapest cost, not the
+    priciest, so a candidate's score no longer shifts just because some unrelated,
+    pricier (or cheaper) candidate joins the pool. Every candidate gets a real cost (a
+    too-small context window is compacted to fit, never excluded — see
+    `_next_call_cost`), so every model in the pool gets a ratio-based score.
+    """
+    costs = estimate_costs(trajectory, models)
+    cheapest = min(costs.values())
 
     for model in models:
         cost = costs[model.name]
-        model.price_score = 1.0 if spread == 0 else (priciest - cost) / spread
+        # cost == 0 only when cheapest == 0 too (costs are never negative), so this is
+        # the tie-at-the-top case, not a magic number -- 0/0 is otherwise undefined.
+        model.price_score = 1.0 if cost == 0 else cheapest / cost
 
     return models

@@ -322,11 +322,18 @@ need. Reaching for it in a *score* is the mistake.
 #### Price scoring formula (implemented, `router_models/price_model.py`)
 
 `score_price(trajectory, models)` estimates the USD cost of each candidate serving the
-trajectory's **next call**, then min-max normalizes those costs into `price_score ∈ [0, 1]`
-across the candidate pool for this trajectory (cheapest → `1.0`, priciest → `0.0`). It reads only
-`Trajectory` fields plus one `ModelLLM` at a time — the only place it looks at
-`trajectory.served_model` is the hold/switch cache check below, which is the exception the shared
-contract above carves out.
+trajectory's **next call**, then scores each cost as a *ratio to the cheapest candidate* in the
+pool for this trajectory: `price_score ∈ (0, 1]`, cheapest → `1.0`, and a candidate priced at `k`
+times the cheapest one → `1/k`. This is deliberately not min-max normalization (`(max_cost −
+cost) / (max_cost − min_cost)`): min-max forces the priciest candidate to exactly `0.0` and the
+cheapest to exactly `1.0` regardless of how close their actual costs are, so a candidate only
+1% pricier than the cheapest gets the same `0.0` floor as one 100× pricier, and every candidate's
+score shifts whenever an unrelated candidate's price changes the pool's max. Ratio-to-cheapest
+scores each candidate from its own cost and the pool's cheapest cost only, so a marginally pricier
+candidate gets a proportionally mild penalty and an unrelated candidate joining the pool doesn't
+move anyone else's score. It reads only `Trajectory` fields plus one `ModelLLM` at a time — the
+only place it looks at `trajectory.served_model` is the hold/switch cache check below, which is
+the exception the shared contract above carves out.
 
 1. **Shape the next call, from `Trajectory` fields alone:**
    - `last_call_input_tokens` — the size of the most recently recovered call's full prompt (tool
@@ -385,18 +392,21 @@ contract above carves out.
      — since neither pricing source discounts a freshly generated output token).
    - `cost = (uncached_tokens · input_price_per_1m + cached_tokens · cached_input_price_per_1m
      + next_output_tokens · output_price_per_1m) / 1e6`.
-4. **Normalize:** `price_score = (max_cost − cost) / (max_cost − min_cost)` over the whole candidate
-   pool; if every candidate ties, all get `1.0`.
+4. **Score:** `price_score = cheapest_cost / cost` over the whole candidate pool (`cheapest_cost =
+   min` over every candidate's cost); a candidate tied for cheapest — including the degenerate
+   case where the cheapest cost is `0` — gets `1.0`.
 
 This reproduces the cache trap directly: a candidate with identical per-token rates to
 `served_model` scores strictly lower than holding, because a switch loses the cache discount on
 `already_cached_tokens`; a much cheaper candidate can still outscore holding if its base rate is
 low enough to absorb that reset penalty. With `total_cached_tokens = 0`, holding and switching to
 an identically-priced model cost exactly the same — there is no cache to lose. Every candidate
-receives a `price_score` — none are excluded or forced to `0.0` — so `score_price`'s min-max range
-always spans the whole pool passed in. Covered by `tests/test_price_model.py` (full cache, partial
-cache, no cache, switching, the cache-aggregate cap, the context-window clamp, and a regression
-test pinning the `last_call_input_tokens` fix itself); verified against synthetic trajectories
+receives a `price_score` — none are excluded or forced to `0.0` — and unlike min-max, a candidate's
+score depends only on its own cost and the pool's cheapest cost, not on the priciest candidate
+present, so it doesn't move just because some unrelated, pricier (or cheaper) candidate joins the
+pool. Covered by `tests/test_price_model.py` (full cache, partial cache, no cache, switching, the
+cache-aggregate cap, the context-window clamp, the ratio-to-cheapest scoring itself, and a
+regression test pinning the `last_call_input_tokens` fix); verified against synthetic trajectories
 only, not yet against the real export (no chunk was available locally when this was written —
 see §3).
 
@@ -416,6 +426,11 @@ see §3).
   and `CACHE_HIT_RATE` in `pre_processing/trajectory_analyzer.py`), just capped down to
   `last_call_input_tokens` before use — it is not itself re-derived as "the last call's own cache
   share" from first principles.
+- Ratio-to-cheapest has its own degenerate case: if the cheapest candidate's estimated cost is
+  exactly `0` (e.g. a fully-cached HOLD with no new increment and no output), every pricier
+  candidate divides by that `0` and lands at exactly `0.0` — a hard floor again, same as min-max,
+  rather than a graded ratio. This only triggers when a next call is estimated to cost literally
+  nothing, a real but rare corner, not the everyday behavior this formula is designed for.
 
 ### Performance
 
