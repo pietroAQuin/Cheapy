@@ -113,7 +113,9 @@ the same contract and a term in `model.py`'s average.
 | `pre_processing/trajectory_analyzer.py` | Parses one JSON line into a `Trajectory` | **implemented** |
 | `router_models/price_model.py` | Assigns `price_score` | **empty stub** |
 | `router_models/performance_model.py` | Assigns `performance_score` | **implemented** — thin adapter onto `analysis/complexity_model/` |
-| `router_models/model.py` | Weighted aggregation, ranking, HOLD/CHANGE decision | **empty stub** |
+| `router_models/model.py` | Weighted aggregation, ranking, HOLD/CHANGE decision | **implemented** — weights are call arguments, never constants |
+| `app/main.py` | Routing simulation over the whole export -> `data/routing_simul.csv` | **implemented** |
+| `run_simul.sh` | One-liner wrapper around `app/main.py` (picks `.venv/bin/python`) | **implemented** |
 | `analysis/complexity_model/` | Offline pairwise-agreement pipeline + the shipped `capability_model.py` — see its `complexity_scoring_spec.md` | **implemented and fitted** on a 947-step run over the export |
 | `data/` | The redacted export (gitignored, challenge-use only) | present locally |
 | `code_agent_utils/` | Organizers' briefing + `/setup`, `/make-presentation`, `/prepare-submission` skills | supplied |
@@ -121,8 +123,11 @@ the same contract and a term in `model.py`'s average.
 
 `data_models/model_llm.py`, `data_models/Trajectory.py`, `pre_processing/model_list.py`, and
 `pre_processing/trajectory_analyzer.py` are implemented and cross-checked against the export —
-treat their contracts as real. `router_models/price_model.py` and `router_models/model.py` are
-still **zero-byte placeholders**. `router_models/performance_model.py` is implemented and backed
+treat their contracts as real. `router_models/price_model.py` is a **zero-byte placeholder on
+this branch** — the implementation lives on `main`, and `app/main.py` cannot run until that is
+merged in; everything downstream is written against its
+`score_price(trajectory, models) -> list[ModelLLM]` contract.
+`router_models/performance_model.py` is implemented and backed
 by a fitted model: the pipeline in `analysis/complexity_model/` was run end-to-end over **947 of
 the 957 eligible trajectories** (10 dropped to content-policy refusals), eliciting the 3 OpenAI
 probes on each and recovering the served model's logged action, for **10,882 measured ordered
@@ -381,6 +386,26 @@ need. Reaching for it in a *score* is the mistake.
 `model.py` owns the weighted average, the ranking, and the HOLD/CHANGE decision. Keep the
 weights a parameter threaded through the call, not a module-level constant — sweeping them is
 how the cost–quality frontier gets produced, and the frontier is the headline artifact.
+
+Implemented as `route(trajectory, models, w_price=..., w_performance=...)`, which runs the whole
+chain for one trajectory and returns a `RoutingDecision`. `final_score` is the weighted average
+divided by the weight sum, so any pair of non-negative weights keeps it inside `[0, 1]`; a model
+missing either sub-score is left out of the ranking rather than scored as 0. Two decision knobs
+sit here: exact ties resolve to the incumbent, and `min_gain` sets how much `final_score` a
+challenger must add before the switch is taken.
+
+### Running the simulation
+
+```
+./run_simul.sh                                     # whole export, 50/50 weights
+./run_simul.sh --w-price 0.15 --w-performance 0.85 # one point on the frontier
+./run_simul.sh --limit 50 --min-gain 0.02
+```
+
+`app/main.py` parses every `data/*.jsonl` line, builds a **fresh** candidate pool per trajectory
+(the stages enrich `ModelLLM` in place, so a shared pool would leak the previous trajectory's
+scores), routes it, writes one row per trajectory to `data/routing_simul.csv`, and prints the
+HOLD / CHANGE TO split with the most-changed-to model. ~23 s for the 1,000-line chunk.
 
 ---
 
