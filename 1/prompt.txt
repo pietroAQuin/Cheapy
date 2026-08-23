@@ -1,0 +1,364 @@
+We are now going to build the model used for defining the score a model gets from performance_model.py. Trained once, then reused for all decisions made by our router. The full and detailed project spec lies under complexity_scoring_spec.md, inside the analysis/complexity_model directory. The model we are going to build should also live inside this same dir. Read the spec and before writing any code present your game plan.
+
+---
+
+Regarding point 2, what do you mean with steps? - I didn't read the questions beyond that point. And just so that we are clear here, we are only going to simulate and sample a single inference round, since we don't actually have the harness of Victor for providing tool outputs.
+
+---
+
+Create a example .env file I can place the keys on. Before running the full 50 cases, run a test request using luna to see if it returns an output that makes sense given the given trajectory. I'll also fill out the official base_scores for each model. Quick sanity check: human-facing response is a valid output-type right? I'll message you again once all those pendencies are filled, then run the test on Luna and give me its response. We have multiple openai keys btw, so if one fails, we can give you a second. We have 3 openai keys in total.
+
+---
+
+I've just populated priors.py with the actual BASE_CAPABILITIES as well as .env with the 3 keys. Nevertheless, a big pivot is now needed. Read the complexity_scoring_rewrite.md file to understand the changes. As done previously, read the .md and propose a plan before touching any files.
+
+---
+
+<task-notification>
+<task-id>ae4a6ff94473f1394</task-id>
+<tool-use-id>toolu_01RTvFTJWJqq4Kopa4i6Kcxm</tool-use-id>
+<output-file>/tmp/claude-1000/-home-pietroquinzani-Documentos-Hackhaton-cheapy/e87f7cdb-c755-43b3-8df7-457f4061cf67/tasks/ae4a6ff94473f1394.output</output-file>
+<status>completed</status>
+<summary>Agent "Explore similarity approximation alternatives" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have what I need. Analysis follows.
+
+---
+
+# Synthesizing 33 unmeasured pair values: critique and alternatives
+
+I read the spec (`analysis/complexity_model/complexity_scoring_spec.md`), the implementation (`priors.py`, `features.py`, `scoring.py`, `train.py`, `capability_model.py`), and — decisively — measured the actual corpus at `/home/pietroquinzani/Documentos/Hackhaton/cheapy/data/trajectories_v1_01.jsonl`. Three empirical findings reframe the problem before any modelling choice.
+
+## 0. Three findings that change the question
+
+**(A) The corpus already contains ~13,000 real Anthropic next-actions.** All 1,000 trajectories carry a `model` field and a full action log:
+
+| served model | trajectories | logged assistant action items |
+|---|---|---|
+| claude-opus-5 | 331 | 4,980 |
+| claude-sonnet-5 | 281 | 5,372 |
+| claude-fable-5 | 71 | 1,255 |
+| claude-opus-4-8 | 69 | 1,176 |
+| claude-opus-4-6 | 2 | 33 |
+| claude-sonnet-4-6 | 1 | 12 |
+| gpt-5.6-sol / terra / luna | 112 / 113 / 20 | 1,576 / 1,130 / 490 |
+
+You cannot *query* Anthropic models. You do not need to. For any prefix cut from an Anthropic-served trajectory, the log **already contains that model's next action**. Query your 3 OpenAI models on that same prefix (which you were doing anyway) and you have a directly measured `pair(anthropic_logged, openai_elicited)`. This costs **zero additional API calls**.
+
+**(B) Prior-distance is close to uncorrelated with behavioural distance.** I built a dialect-invariant behavioural fingerprint per model (canonical turn segmentation; message-turn rate, parallel-call rate, tools-per-turn, turns-per-trajectory, canonical role mix over exec/read/edit/view/draft/coworker/write/wait). Over the 7 well-sampled models: **Pearson r(behavioural distance, prior distance) = 0.27, Spearman = 0.16.**
+
+Worse, *within the three pairs you can actually measure*, the two orderings are reversed:
+
+| measured pair | prior distance | behavioural distance |
+|---|---|---|
+| gpt-5.6-terra :: gpt-5.6-luna | **0.117 (smallest)** | **0.701 (largest)** |
+| gpt-5.6-sol :: gpt-5.6-terra | 0.378 | **0.309 (smallest)** |
+| gpt-5.6-sol :: gpt-5.6-luna | 0.495 | 0.557 |
+
+The baseline is going to fit a *monotone* `S(d)` to three points whose plausible target values are anti-ordered in `d`. The best a monotone two-parameter family can do with a rank reversal is come out nearly flat. A flat `S` means `pair(a,b) ≈ A(step)` for every pair, which (see §1) makes the whole model a prior lookup.
+
+**(C) A provider-confound and an encoding trap.** Toolsets are perfectly separated by provider — Anthropic trajectories carry `bash` / `file_read` / `file_write` / `file_edit`; OpenAI trajectories carry `apply_patch` / `shell_command`. Zero overlap. So all 3 measured pairs are measured on a tool dialect covering 24.5% of the corpus, then applied to a corpus that is 75% the other dialect. That is a *second* undeclared extrapolation stacked on the prior-distance one.
+
+And a trap that will silently manufacture a fake provider effect: **74–83% of `message/assistant` items in Anthropic logs are non-terminal preamble** (they sit adjacent to tool calls), versus **94% of OpenAI assistant messages being terminal** (OpenAI puts preamble in `reasoning` items, which Anthropic logs don't have). A naive "message vs tool_call" classifier reads Anthropic message-rate as 0.40–0.55 and OpenAI as 0.07–0.13 — a spurious 4× gap that would drive Stage A (`SCORE_MESSAGE_WHEN_TOOL = 0.00`) and make every cross-provider pair look catastrophically divergent. After correct turn canonicalization all 9 models sit at **0.07–0.29**. `parser.py` must get this right or every proposal below is poisoned.
+
+---
+
+## 1. The baseline collapses analytically — no data needed
+
+Substitute the baseline into the score formula. With `p_ij = 1 − (1−A)·S(d_ij)`:
+
+```
+score(i) = ( w_i + Σ_{j≠i} w_j·p_ij ) / W
+         = ( W − (1−A)·Σ_{j≠i} w_j·S(d_ij) ) / W
+         = 1 − (1−A(step)) · C_i ,      C_i ≡ Σ_{j≠i} w_j S(d_ij) / W
+```
+
+`C_i` is a **per-model constant, independent of the step**. Therefore:
+
+- The **ranking of the 9 models is identical on every one of the 957 steps.** `A(step)` is a single scalar gain that scales all gaps uniformly. The ~15-feature ridge regression, all of `features.py`, exists to produce one number that says "how much does capability matter here" — i.e. a difficulty scalar, which §0 of the spec explicitly disclaims ("no difficulty scale, no latent ability, no IRT").
+- The required property is satisfied only in its *weakest* form: gaps do open on contested steps (`gap_ij = (1−A)(C_j − C_i)`), and all pairs → 1 when `A → 1`. But the model can never say "on file-heavy steps sonnet-5 beats opus-4-8, on message-heavy steps the reverse." It has no such expressive capacity.
+- `C_i` is prior-axis centrality. I computed it for the actual priors, `D_REF = 0.3299`, `s0 = 0.05`:
+
+  - `BETA=1, γ=1`: opus-5 (0.552) &lt; sol (0.582) &lt; fable-5 (0.587) &lt; opus-4-8 (0.617) &lt; opus-4-6 &lt; sonnet-5 &lt; terra &lt; luna &lt; sonnet-4-6. Spearman vs prior ≈ 0.98.
+  - `γ` between 0.5 and 2.0 only permutes the top four. The grid search over γ is deciding almost nothing.
+  - `BETA=0`: ranking becomes sonnet-5 &gt; terra &gt; opus-4-6 &gt; luna &gt; opus-4-8 &gt; sol &gt; opus-5 &gt; fable-5 — mid-axis models win, which is nonsense, and it exposes that "conformity on a 1-D axis" is just "closeness to the weighted centroid".
+
+  **The spec's own §4 sanity check ("if rank correlation with the prior is near 1.0, the measurement is contributing nothing and BETA is too high") fails by construction, before a single API call.**
+
+- One more directional bias: `s0` is measured from a self-pair at temperature 0, achievable only on OpenAI models. Spec §2.1 records that `claude-opus-4-8` **400s** on any non-default `temperature`. Anthropic models therefore run at provider default and carry sampling noise the anchor never saw. `s0` is a biased-low estimate of the noise floor for exactly the pairs it is extrapolated to — so every Anthropic pair is predicted too high, every Anthropic model scores too high, and the router systematically over-routes to the expensive provider. That bias costs real money and points directly against the project's stated goal.
+
+**Verdict on the baseline: not merely under-identified — structurally degenerate.** It is a monotone reparameterisation of the prior, dressed in a regression.
+
+---
+
+## 2. The identification budget
+
+Be blunt about what 3 models buy you.
+
+- 3 models → **3 unordered off-diagonal cells** (6 ordered). That is the entire pairwise evidence base.
+- The three prior-distances satisfy an exact linear relation (`d_sol,luna = d_sol,terra + d_terra,luna`; three points on a line always do). Distance is one-dimensional and nearly exhausted.
+- Any model of the form `pair = f(level_a, level_b)` needs ≥3 per-model parameters → **exactly saturated, 0 residual df, untestable**. Any distance-only model uses 1–2 params → 1–2 residual df. **You cannot separate distance from level with 3 models. Full stop.** No amount of Bayesian machinery creates that information; a prior over the confound just relabels the assumption.
+- `same_provider` and `same_family` are **constant (=1) across all training rows**. `features.pair_descriptor` emits them anyway; ridge will hand them coefficients that are pure minimum-norm regularization artifacts, and `capability_model._predict_pair` will then apply those artifacts to 33 rows where the flags are 0. That is silent, unlabelled extrapolation, and it is worse than the baseline in the prompt (which at least makes the extrapolation an explicit, inspectable `S(d)` curve). **The `pair_descriptor` version currently in the repo should be deleted regardless of which proposal you adopt.**
+- Similarly, the 5 prior columns (`prior_a, prior_b, prior_min, prior_max, prior_abs_diff`) span at most a 3-point support. The pair-feature block is rank-deficient by 4.
+- Generation/family structure (opus-5 / opus-4-8 / opus-4-6; sonnet-5 / sonnet-4-6; fable-5; gpt-5.6×3) has **zero degrees of freedom** in the measured data: all three measured pairs are same-provider, same-family, same-generation. Family effects are unidentifiable and any family term is prior in disguise.
+
+---
+
+## 3. Proposals
+
+### P1 — Logged-action pseudo-elicitation (change the data, not the formula)
+
+**Form.** For a prefix cut at step *t* of trajectory τ served by model *m*, let `â_m` = the model's **logged** action at *t*, parsed through the same canonical pipeline. For each OpenAI probe *o* ∈ {sol, terra, luna}, elicit `a_o` and record the measured target `pair(â_m, a_o)` — the identical Stage A/B function in `scoring.py`.
+
+Then calibrate the logged-vs-elicited offset. On OpenAI-served trajectories you observe *both* forms for the serving model:
+
+```
+δ_o ≡ E[ pair(a_o , a_p) ]  −  E[ pair(â_o , a_p) ]        for probes p ≠ o
+pair_corrected(m, o) = pair(â_m, a_o) + δ̄            (with δ̄ estimated across sol/terra/luna)
+```
+
+**Learned vs assumed.** Learned: 18 of 33 cross-provider pair values, per step, from real behaviour; per-model malformed rates for all 9; `δ_o` for three models. Assumed: that `δ` is model-independent (or provider-independent). That is **one scalar assumption with a measured magnitude and a built-in falsification test** — if `δ_sol`, `δ_terra`, `δ_luna` disagree materially, you report that and widen the interval instead of shipping a point estimate.
+
+**Required property.** Preserved exactly: this is a *measurement* method, not a functional form. On an easy step, the logged Anthropic action and every elicited OpenAI action are the same tool → `pair` = 1 → all scores 1.0 → cost decides. It delivers the property empirically rather than by construction, which is strictly stronger.
+
+**Fit at this scale.** 957 steps sampled proportionally are ~75% Anthropic-served → ~720 steps yielding cross-provider measurements, each contributing 3 cross-provider pair values (~2,160 rows) on top of the 3 within-OpenAI pairs. Per-model n: opus-5 and sonnet-5 are richly covered; fable-5 and opus-4-8 have ~1,200 candidate action items each — comfortably enough. **Oversample the two rare models deliberately**: all 33 opus-4-6 and all 12 sonnet-4-6 action items, ~45 extra steps × 3 probes = 135 extra calls. Report their CIs honestly (they will be wide, and 2 and 1 trajectories mean the between-trajectory variance is effectively unestimable — say so).
+
+**Cost.** Zero additional API spend versus the current plan. You are already querying 3 OpenAI models on sampled prefixes; you simply also parse the logged action you were throwing away. `features.py` already forbids reading the recorded action *as a feature* (correct — leakage); using it as a **target** is not leakage, because at inference the router never needs it.
+
+**Failure modes.** (i) Home-field advantage — the logged action was produced by the model that wrote the entire prefix, in its own conventions; the probes are teacher-forced. This is real, but it is *the same asymmetry in the OpenAI calibration set*, so `δ` absorbs it apples-to-apples. (ii) The logged action was sampled at the harness's temperature, not 0 — inflates measured divergence; again symmetric across the calibration. (iii) Task mix differs by served model (assignment is not random), so cross-model comparisons confound model with task; mitigate by stratifying or reweighting on `Trajectory` features and reporting the reweighted estimate alongside the raw one. (iv) It yields **nothing** for the 15 Anthropic–Anthropic pairs. (v) Two-encoding canonicalization must be exact — finding (C) above is the specific hazard.
+
+**Falsification.** Hold out one probe. Fit everything on sol+terra, predict the luna column (6 Anthropic–luna cells plus sol–luna and terra–luna), score against measured. That is a genuine **held-out cross-provider test** — something the baseline can never construct.
+
+**Verdict: far more defensible than the baseline.** It converts 18/33 pairs from assumption to measurement at zero marginal cost, and turns "cross-provider extrapolation" from an unbounded assumption into one calibrated scalar.
+
+---
+
+### P2 — Landmark (Nyström) completion for the remaining 15 A–A pairs
+
+**Form.** With P1 in place you observe, for each step (or pooled), the full columns of the 9×9 agreement matrix corresponding to the 3 probes: the 3×3 block `M_OO` (elicited), the 6×3 block `M_AO` (logged-vs-elicited, δ-corrected), and self-pairs on the diagonal. Symmetrize (see the asymmetry note below), then
+
+```
+M̂_AA = M_AO · M_OO⁺ · M_AO^T          (Nyström extension; M_OO⁺ = pseudo-inverse)
+pair(a,b) = clamp( M̂_AA[a,b], 0, 1 )
+```
+
+Equivalently: each model gets a 3-vector of measured agreements with the probes — a **behavioural embedding whose coordinates are measured, not assumed** — and A–A agreement is the induced inner product.
+
+**Learned vs assumed.** Learned: the 3-dim embedding of all 9 models, entirely from data. Assumed: that the agreement kernel has effective rank ≤ 3, and that the 3 probes span the relevant subspace.
+
+**Required property.** Holds if you factor the step effect out first: work with `M(step) = 1 − (1−A(step))·D`, where `D` is the completed *divergence* matrix. As `A → 1` every entry → 1. Alternatively run the completion per step-bucket. Either way the property is structural.
+
+**Fit.** `M_OO` is 3×3 and will be near-singular if the three probes are behaviourally similar — regularize (`M_OO + λI`) and report the condition number; a large one is the honest signal that 3 probes do not span the space. Rank is *capped at 3 by the probe count* — say so explicitly.
+
+**Failure modes.** Rank-3 is not verifiable from 3 landmarks; it is exactly saturated for the A–A cells. Nyström can emit values outside [0,1] and non-PSD completions. If Anthropic-family behaviour lives in directions orthogonal to the span of {sol, terra, luna} — plausible, since it is a different provider with a different tool dialect — those directions are invisible and A–A agreement is systematically **overestimated** (two Anthropic models look similar because they are similar *as seen by OpenAI probes*, which is not the same claim). Name this. It is the single largest residual risk after P1.
+
+**Falsification.** Leave-one-probe-out (as in P1) tests the machinery on cross-provider cells. It does **not** test the A–A cells; nothing available does. Report A–A cells with an explicitly wider uncertainty band than A–O cells.
+
+**Verdict: more defensible than the baseline**, and the only principled route to the 15 remaining cells — provided the rank cap is stated rather than hidden.
+
+---
+
+### P3 — Latent-threshold / shared-base-policy copula (best pure-formalism proposal)
+
+**Form.** Posit a latent continuous propensity per model per step:
+
+```
+z_i(s) = μ_i + θ(s) + ε_i(s) ,   ε_i ~ N(0, σ_i²) ,  Corr(ε_i, ε_j) = ρ_ij
+action_i(s) = message   if z_i(s) &lt; τ_i , else tool_call
+θ(s) = shared step effect   (the "obviousness" of the step; the honest version of A(step))
+```
+
+Then Stage A probabilities are bivariate normal orthant probabilities, and the type-agreement term is `Φ₂(·,·;ρ_ij)`. Stage B (Jaccard) is layered as a second stage conditional on both calling tools, with tool choice drawn from a per-model perturbation of a shared base policy whose perturbation magnitude is a free per-model parameter.
+
+**Why this fits the data shape uniquely well.** The per-model thresholds `τ_i` are identified **from the corpus marginals for all 9 models**, at n = 1,000–5,000 turns each — no API calls. The measured pairs are then spent entirely on the *dependence* parameters `ρ`, which is where they are scarce. Constrain `ρ_ij = ρ` (one parameter) or `ρ_ij = ρ_within-provider / ρ_cross-provider` (two — the second identifiable only once P1 supplies cross-provider measurements).
+
+**It also handles the asymmetry natively.** `scoring.pair` is asymmetric (`SCORE_MESSAGE_WHEN_TOOL = 0.00` vs `SCORE_TOOL_WHEN_MESSAGE = 0.15`). Every kernel/PSD/correlation method (including the baseline, which depends only on `|d|`) is structurally incapable of representing that. The latent-threshold model produces `P(i=message, j=tool)` and `P(i=tool, j=message)` separately from the two thresholds, so the asymmetry falls out of measurable marginals.
+
+**Bounds for free.** Before fitting anything, Fréchet–Hoeffding gives hard bounds on co-occurrence from marginals alone: `max(0, p_i+p_j−1) ≤ P(both message) ≤ min(p_i, p_j)`. Those bounds hold **for all 36 pairs**, are derived from corpus marginals with no assumptions, and can be shown to a judge as "here is what is knowable without querying anything."
+
+**Required property.** Falls out structurally: as `θ(s)` moves far from every threshold, all models land on the same side, all pairs → 1, gap → 0, cost decides. This is a *better* derivation of the required property than the baseline's, because it is a mechanism rather than a multiplicative fudge.
+
+**Fit.** Marginals `τ_i`, `σ_i` from the corpus (all 9 models). `θ(s)` regressed on the existing 15 step features — same ridge, now with a probit link, which also fixes the spec's own "bounded target, mass at 1.0" problem properly instead of by clamping. `ρ` fitted on the measured pairs (3, or 21 with P1). Estimation: pairwise composite likelihood; a few hundred lines, no exotic tooling.
+
+**Failure modes.** Marginals are estimated on each model's *own* trajectories, so they confound model behaviour with task mix and with the fact that a model that stopped early produced a shorter trajectory (selection). The Gaussian copula assumption is untestable at 3 pairs. Most importantly: a single `ρ` means the ranking is again largely marginal-driven — expressive gain over the baseline comes from the *thresholds* varying, not from the dependence structure.
+
+**Falsification.** The bounds are falsifiable directly: if a measured pair value violates the Fréchet interval implied by the two marginals, the marginals are wrong (encoding trap (C) is the likely culprit) or the logged/elicited regimes are not comparable. That is a real, cheap, pre-registration-style test.
+
+**Verdict: more defensible than the baseline**, and the strongest proposal that does not require P1. Combine with P1 and it is stronger still.
+
+---
+
+### P4 — Hierarchical Bayes with partial pooling
+
+**Form.** `logit(pair_ij(s)) = α + θ(s) + u_i + u_j + γ·d_ij + η·same_provider + ...`, with `u ~ N(0, σ_u²)`, weak priors, posterior over unmeasured cells.
+
+**Assessment.** The honest thing it buys is **posterior uncertainty on unmeasured pairs** — the single best communication artifact for "naming where the estimate can fail." The dishonest thing it risks: with 3 pairs, `η` (provider) has **zero data**, so its posterior *is its prior*, and a naive reader sees a credible interval and believes it was learned. If you use P4, you must run and show a **prior-predictive check** and explicitly label which parameters have zero likelihood contribution.
+
+**Required property.** Needs care: `logit` never reaches 1.0 exactly. Either use a hurdle/zero-one-inflated Beta (mass at 1.0, which the spec correctly predicts dominates the target distribution) or accept `pair → 1−ε` and note that scores become `1−ε` uniformly, which is fine because the *gap* still goes to 0.
+
+**Verdict: more defensible than the baseline on communication, no more defensible on identification.** It does not create information. Use it as the *reporting layer* on top of P1+P3, not as the estimator.
+
+---
+
+### P5 — GP / kernel regression on the prior axis with explicit uncertainty
+
+**Form.** `pair(a,b,s) = 1 − (1−A(s))·f(d_ab)`, `f ~ GP(mean, Matérn)` with the self-pair anchoring `f(0)`.
+
+**Assessment.** This is the *honest version of the baseline* and nothing more. Its real value is that the posterior variance explodes outside `[0.117, 0.495]`, which visibly and correctly flags that `d = 0.723` (fable-5 :: luna) and `d = 0.044` (fable-5 :: opus-5) are out of support. That is a good plot.
+
+But it inherits every structural defect: it depends only on `d`, so the collapse theorem of §1 applies verbatim (`C_i` still step-independent), it cannot represent Stage A asymmetry, and it will be fit to three anti-ordered points. **The GP will correctly tell you it has learned nothing** — which is useful, and is a reason to fit it as a *diagnostic*, but it is not a router component.
+
+**Verdict: not more defensible than the baseline as an estimator — it is the baseline. Strictly better as a diagnostic.** Fit it, show the exploding error bars, use it to justify abandoning the prior axis.
+
+---
+
+### P6 — Bradley–Terry / Plackett–Luce adapted to agreement
+
+**Assessment: reject.** BT is a model of *ordered dominance* — `P(i beats j) = σ(β_i − β_j)`, antisymmetric around 0.5. Agreement is *symmetric and non-ordered*: `pair(i,j)` should be high when models are alike, not when one is stronger. Forcing agreement into a BT link gives you `pair = σ(β_i − β_j)`, which says model *i* agrees with a weaker model *less* than 0.5 and with a stronger one *more* — behaviourally meaningless. The salvageable variant is `pair = σ(−|β_i − β_j|)` — which is exactly the baseline with a different link and the same collapse. And with 3 models, 3 `β`s on 3 observations is saturated at 0 df.
+
+**Verdict: less defensible than the baseline** (it adds a semantically wrong link on top of the same degeneracy) and **unfittable** at 3 models. Do not pursue.
+
+---
+
+### P7 — Correlation-matrix completion under PSD constraint
+
+**Form.** Treat the symmetrized agreement matrix as a correlation matrix; complete the unmeasured entries by maximum-entropy (the completion that maximizes `log det`), which is the unique completion adding no information beyond the observed entries.
+
+**Assessment.** Theoretically the most attractive "assume nothing extra" story, and it has a nice property: the max-det completion of a partially specified matrix is the one whose unspecified entries encode *conditional independence given the observed ones* — a defensible neutrality claim.
+
+But: **without P1 the observed pattern is a 3×3 block plus a diagonal, and the maximum-entropy completion of that is exactly "all unmeasured entries = the value implied by conditional independence given nothing" — i.e. it returns the least informative constant.** It produces no differentiation among the 6 Anthropic models, so the required "contested step opens a gap" property degenerates to the prior-only `w_i/Σw` term. It also cannot represent Stage A asymmetry, and agreement values that hit 1.0 exactly (unanimity, the modal case) make the matrix singular.
+
+**With P1 in place, P7 becomes P2 with a different objective** and the PSD constraint as a bonus sanity check (it will catch Nyström completions that are internally inconsistent).
+
+**Verdict: less defensible than the baseline standalone** (returns a constant, no gap). **Worth keeping as a PSD validity check on P2's output.**
+
+---
+
+### P8 — Behavioural-fingerprint distance replacing prior distance
+
+**Form.** Same functional shape as the baseline, `pair = 1 − (1−A(s))·S(δ_ab)`, but `δ_ab` is the **corpus-measured** dialect-invariant behavioural distance of finding (B), available for all 36 pairs at zero API cost.
+
+**Learned vs assumed.** Learned: `δ` for all 36 pairs, from thousands of real turns per model. Assumed: that `S` maps behavioural distance to agreement monotonically, calibrated on 3 points.
+
+**Assessment.** This is the cheapest strict improvement over the baseline and can be built in an hour. `δ` at least *varies in a way agreement plausibly does* — the fingerprint separates luna (parallel-heavy, 1.45 tools/turn, 17.1 turns/traj, exec-share 0.85) from sonnet-5 (1.03 tools/turn, parallel rate 0.017) far more sharply than their prior gap of 0.187 does.
+
+But it does **not** escape the collapse theorem: `C_i = Σ_j w_j S(δ_ij)/W` is still step-independent, so the ranking is still fixed across all 957 steps. And the fingerprint confounds model with task mix (assignment is not random) and with tool dialect (partially mitigated by canonical roles, not eliminated). And it is still calibrated on 3 points.
+
+**Verdict: more defensible than the baseline** (measured distances beat assumed ones, and it makes the extrapolation to Anthropic *interpolation* rather than extrapolation on the distance axis) but it shares the fatal structural limitation. Use as a **fallback if P1 cannot be built in time.**
+
+---
+
+### P0 — Refuse to point-estimate: interval-valued pair values
+
+**Form.** Emit `[pair_lo, pair_hi]` per unmeasured pair (Fréchet bounds from P3's marginals, or a P4 posterior interval), propagate through the score formula (which is monotone in each `pair_ij`, so bounds propagate exactly), and hand `model.py` a score *interval* per model. Route on the interval: if two models' intervals overlap, the capability model **declares no preference** and cost decides.
+
+**Assessment.** This is the most intellectually honest possible output and it is *operationally meaningful* — "we cannot distinguish these two models on this step, so buy the cheap one" is exactly the router behaviour the required property asks for, generalized. It also degrades gracefully: with only 3 measured pairs the intervals are wide, everything overlaps, and the router routes on cost — which is the correct behaviour of a system that has measured almost nothing.
+
+**Risk:** if the intervals are so wide that nothing is ever distinguishable, you have a router that ignores capability entirely, and a judge may read that as "no model." Mitigate by pairing it with P1, which narrows 18 of 33 intervals to measured values.
+
+**Verdict: the best framing for a rigor-scored hackathon**, and cheap. Ship it as the presentation layer.
+
+---
+
+## 4. On "real evidence about Anthropic models without querying them"
+
+Concretely, ranked by realism:
+
+1. **The corpus itself — yes, decisively (P1).** 752 Anthropic-served trajectories, ~12,800 logged Anthropic actions, on exactly the task distribution and toolsets the router faces. This is not a proxy; it is the target quantity, measured, with one named bias (`δ`) that is itself calibratable. Anything else is a distant second.
+2. **Corpus behavioural marginals for all 9 models (P3, P8) — yes.** Message/tool rates, parallelism, tools-per-turn, tool-role mixes, run lengths, trajectory lengths. Real, cheap, covers all 9 including opus-4-6 and sonnet-4-6 (n=2 and n=1, so: report, do not rely).
+3. **Public per-item eval data — realistically, no.** Item-level model outputs do exist in places (function-calling leaderboards, per-instance SWE-bench submission logs), and in principle you could compute cross-model item agreement from them. Three reasons it does not help here: the `gpt-5.6-*` ids in this challenge do not map to any public leaderboard entry, so half the matrix would be missing anyway; agreement on a static benchmark's final answer is a categorically different quantity from next-action agreement on a mid-flight Viktor trajectory, and you would have no way to validate the transfer; and the scrape-and-align effort exceeds the hackathon. **Say plainly that you considered and rejected it, with those reasons — that is worth more to a reviewer than a half-done version of it.**
+4. **Model cards / published behavioural signatures — no.** Qualitative, not pairwise, not quantitative. Cite for narrative, never for a number.
+5. **Pricing as a capability proxy — already what the priors are.** Adds nothing new.
+
+---
+
+## 5. Which proposals break the level/distance confound?
+
+| Proposal | Breaks confound? | Why |
+|---|---|---|
+| Baseline `S(d)` | **No** | 3 pairs, distance is 1-D and exhausted; terra–luna is simultaneously "closest" and "both weakest" |
+| P5 GP on `d` | **No** | Same support, same confound; only reports it honestly |
+| P8 fingerprint distance | **Partially** | `δ` is not monotone in capability level (r=0.27 with prior distance), so the two axes separate — but still only 3 calibration points |
+| P6 Bradley–Terry | **No** | Saturated at 0 df; also semantically wrong |
+| P7 PSD completion | **No** (standalone) | Returns a constant |
+| P3 latent threshold | **Yes, partially** | Thresholds `τ_i` are level-like and estimated from 9 models' own corpora, independently of the 3 measured pairs, which are then spent purely on dependence |
+| **P1 pseudo-elicitation** | **Yes** | Every one of the 9 models gets ≥3 measured agreement values against a fixed probe set; level and distance are separately identified because you observe 21/36 cells instead of 3/36 |
+| **P2 Nyström on P1** | **Yes for A–O, no for A–A** | A–A rank is capped by the 3 probes; be explicit |
+
+---
+
+## 6. Ranking and recommendation
+
+1. **P1 — logged-action pseudo-elicitation.** Zero marginal API cost, converts 18 of 33 pairs from assumption to measurement, is faithful to the deployment condition (a mid-flight switch really does hand an OpenAI model an Anthropic toolset), carries one calibratable scalar assumption with a built-in falsification test, and enables a genuine held-out cross-provider validation via leave-one-probe-out. **Build this first. It is the whole answer.**
+2. **P3 — latent-threshold copula**, with per-model thresholds from corpus marginals and one or two dependence parameters from the measured pairs. Provides the mechanism, handles the Stage A asymmetry that every symmetric method cannot, derives the required property structurally, and supplies assumption-free Fréchet bounds for all 36 pairs. Fittable in an evening.
+3. **P2 — Nyström completion** for the 15 remaining A–A cells, regularized, with the rank-3 cap and its overestimation bias stated in the writeup. **P7's PSD check as validation.**
+4. **P0 — interval-valued output** as the presentation and routing layer over the above. Overlapping intervals → cost decides, which is the required property generalized.
+5. **P4 — hierarchical Bayes** as the reporting layer only, with a prior-predictive check and explicit labelling of zero-likelihood parameters.
+6. **P8 — fingerprint distance** as the drop-in fallback if P1 cannot land in time. Strictly better than the baseline for one hour of work.
+7. **P5 — GP on the prior axis**, fit as a *diagnostic* to demonstrate that the prior axis carries no usable signal. The exploding error bars outside `[0.117, 0.495]` are a good slide.
+8. **Baseline** — degenerate per §1.
+9. **P6 Bradley–Terry** — reject outright.
+
+**Minimum viable pivot, in build order:** (a) fix the turn-canonicalization trap in `parser.py` (finding C) — everything depends on it; (b) delete `same_provider` / `same_family` / the redundant prior columns from `features.pair_descriptor`, which are zero-variance in training and silently extrapolated at inference; (c) implement P1 target extraction; (d) fit P3's probit-link step model in place of the raw ridge; (e) P2 for the A–A cells; (f) report as P0 intervals.
+
+**What to tell a judge.** The strongest sentence available is: *"We could not query 6 of 9 models, so instead of inventing their agreement from a benchmark score, we recovered 13,000 of their real next-actions from the corpus and measured it — and here is the leave-one-probe-out test showing the completion machinery works on cross-provider pairs it never saw."* That is a rigor story. The baseline's story is *"we assumed agreement decays with a benchmark gap, fit a two-parameter curve to three points, and extrapolated to 33"* — and §1 shows that this reduces exactly to ranking models by the benchmark you started from.</result>
+<usage><subagent_tokens>81138</subagent_tokens><tool_uses>17</tool_uses><duration_ms>511048</duration_ms></usage>
+</task-notification>
+
+---
+
+What do you mean by offset? Furthermore, what do you propose for the Nyström completion? What it does and will return exactly?
+
+---
+
+<task-notification>
+<task-id>b2aw1w0ev</task-id>
+<tool-use-id>toolu_015sShbjEW4mKJNukNDM4moW</tool-use-id>
+<output-file>/tmp/claude-1000/-home-pietroquinzani-Documentos-Hackhaton-cheapy/e87f7cdb-c755-43b3-8df7-457f4061cf67/tasks/b2aw1w0ev.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait and check pilot progress" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Let the run finish, then re-check the gate
+
+---
+
+go ahead with the richer prefix features. Present brainstormed/explored features before implementing
+
+---
+
+Explain the GBT step-consensus + measured per-pair cells approach
+
+---
+
+There's still a shell running btw. What is it doing?
+
+---
+
+Alright, so what is your proposed next step?
+
+---
+
+So performance_model.py is done?
+
+---
+
+Run the beta sweep
+
+---
+
+I think you are restating the obvious. We are not focusing on measuring if a model is adequate for a trajectory, we are actually measuring consensus across models. If all models have the same opinion, score should be 1, if all models diverge, comformity with the most intelligent model should get rewarded. Thats our signal for scoring a model's performance_score.
+
+---
+
+Change DEFAULT_BETA to 3. Check if the BASE_CAPABILITIES of priors.py is being used for determining most inteligent model
+
+---
+
+Ok. capability_model seems then to be finished. Restate in high-level language what it does and how it scores models
+
+---
+
+Ok, implementation of the capability_model is done. Formalize the used methodology under a section for capability_model under README.md. The description should be clear and use very simple language (keep it friendly). First explain the high-level idea so that a anyone can understand it, then explain important desing decisions afterwards. Very important: clearly state the resulting quality-metrics of the model trained, like r-squared. Those need to be visible, so that the quality of our predictions is honest and transparent.
