@@ -225,9 +225,14 @@ class TestNextCallCost(unittest.TestCase):
 
 
 class TestScorePrice(unittest.TestCase):
-    """Exercises `score_price`'s normalization across a candidate pool."""
+    """Exercises `score_price`'s ratio-to-cheapest scoring across a candidate pool."""
 
     def test_hold_outscores_equally_priced_switch(self):
+        # model-a (hold) costs 0.00396, model-b (switch) costs 0.0072 -- see
+        # test_partial_cache_hold_splits_context_correctly / test_switch_bills_the_
+        # entire_next_input_uncached for the per-candidate arithmetic. Ratio-to-cheapest:
+        # model-a is the cheapest (1.0); model-b scores cheapest/cost = 3960/7200 = 0.55,
+        # not the min-max 0.0 -- it's pricier, not free.
         trajectory = make_trajectory(
             served_model="model-a",
             total_tokens=10_000,
@@ -241,7 +246,7 @@ class TestScorePrice(unittest.TestCase):
 
         by_name = {m.name: m.price_score for m in models}
         self.assertEqual(by_name["model-a"], 1.0)
-        self.assertEqual(by_name["model-b"], 0.0)
+        self.assertAlmostEqual(by_name["model-b"], 0.55)
 
     def test_no_cache_ties_hold_and_switch_at_full_score(self):
         trajectory = make_trajectory(
@@ -279,9 +284,12 @@ class TestScorePrice(unittest.TestCase):
         #   -> cost = (1800*2.0 + 1800*0.2)/1e6 = 0.00396
         # model-b (switch, uncached): uncached = 3000+600=3600 -> cost = 0.0072
         # tiny (switch, clamped to 1,000): uncached = 1000+600=1600 -> cost = 0.0032
+        # Ratio-to-cheapest (tiny, 0.0032): tiny=1.0, model-a=0.0032/0.00396=80/99,
+        # model-b=0.0032/0.0072=4/9 -- pricier than tiny, but not zeroed just for being
+        # the priciest of the three.
         self.assertAlmostEqual(by_name["tiny"], 1.0)  # cheapest: least to bill
-        self.assertAlmostEqual(by_name["model-a"], 0.81)
-        self.assertAlmostEqual(by_name["model-b"], 0.0)  # priciest
+        self.assertAlmostEqual(by_name["model-a"], 80 / 99)
+        self.assertAlmostEqual(by_name["model-b"], 4 / 9)
 
 
 if __name__ == "__main__":
