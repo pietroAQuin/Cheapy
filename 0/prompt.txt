@@ -1,0 +1,125 @@
+lets think about a smart way of doing the benchmark, something that actually shows our router is useful. It has to be in graph format
+
+---
+
+delete the "same quality, lower cost..." and make hold policy stay near its point in the graph, check if it is readable. The bar chart is impossible to read, fix it and check if text dont overlap before handing me the new graph
+
+---
+
+the bar chart doesnt need to have w = 0.1, because it it the same thing as always cheap. The price is also overlapping in always cheap, push it up a bit
+
+---
+
+in the frontier graph take away the CLI, it doesnt look clean. Also calculate using all data that we have
+
+---
+
+is there any way to make the bar chart better? Is w= 1.0 the best way to show our router?
+
+---
+
+yes
+
+---
+
+now explain what we can see in the graphs, how to interpret it
+
+---
+
+in the frontier.png, the line actually goes past 0.8, where always strongest is. Is this an error or should it be like this? Shouldnt it sit at 1.0?
+
+---
+
+so is it better to change the labels on the graph to make it more understandable?
+
+---
+
+how do you plot this graph? How do you make the line
+
+---
+
+how does this dedupe and pareto_efficient thing work? explain in a simple way
+
+---
+
+cant we use this same logic to plot how much our router would spend on each trajectory instead of changing the weight? we can fix the weight at 0.1 and show that our router is good. Or is this a bad idea
+
+---
+
+yes, if i think it looks bad you just reverse it
+
+---
+
+i guess it is best if we only keep the bar chart. what would our main weakness be then?
+
+---
+
+i want to push just the script necessary to do the bar graph, the other graphs are not going to be used.
+
+---
+
+change the graph label to price Weight or the name of the variable in the code instead of just w. Also re run the benchmarking
+
+---
+
+A 02 chunk just hit the loading dock: trajectories_v1_02.jsonl.tar.gz. 
+
+Same shape as the first one, so your loader won't notice the difference, but your solution will.
+
+curl -L -o trajectories_v1_02.jsonl.tar.gz https://ref.viktor.com/tumai-data-02
+
+
+Extract it next to chunk 01 and point your router at both.
+
+---
+
+extract it. it isnt in export
+
+---
+
+redo the exporting changes. Only benchmarking graph should be different from before
+
+---
+
+can the program be run from sh?
+
+---
+
+no, i mean whats stated in the README, the whole programm
+
+---
+
+what is the tech stack used?
+
+---
+
+write it in a single sentence, only listing it
+
+---
+
+(.venv) rodrigocarballotakahashi@w197-2p-v4 Cheapy % ./run_simul.sh export/trajectories_v1_01.json
+weights: cost 0.1 / performance 0.9   beta 3.0   price-exponent 0.25   cache-hit-rate 1.0   min-gain 0.0
+Traceback (most recent call last):
+  File "/Users/rodrigocarballotakahashi/Projects/Cheapy/src/cheapy/cli.py", line 340, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/rodrigocarballotakahashi/Projects/Cheapy/src/cheapy/cli.py", line 325, in main
+    results = simulate(
+        chunks,
+    ...<3 lines>...
+        on_result=on_result,
+    )
+  File "/Users/rodrigocarballotakahashi/Projects/Cheapy/src/cheapy/cli.py", line 124, in simulate
+    for trajectory, chunk_name in iter_trajectories(
+                                  ~~~~~~~~~~~~~~~~~^
+        chunks, limit=limit, cache_hit_rate=config.cache_hit_rate
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+  File "/Users/rodrigocarballotakahashi/Projects/Cheapy/src/cheapy/cli.py", line 101, in iter_trajectories
+    yield analyze(line, count, cache_hit_rate=cache_hit_rate), chunk.name
+          ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/rodrigocarballotakahashi/Projects/Cheapy/src/cheapy/preprocessing/trajectory_analyzer.py", line 227, in analyze
+    tool_defs: list[dict] = record.get("tools") or []
+                            ^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'get'why does this happen?
