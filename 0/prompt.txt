@@ -1,0 +1,17 @@
+what is this dropping of chunk 02?
+
+---
+
+so it works with only one chunk
+
+---
+
+does the benchmarking run when i run the program with ssh
+
+---
+
+add this to the benchmark. be minimal
+
+---
+
+revert all that i asked in the last prompt. I meant to change the README to add how to run the benchmark
