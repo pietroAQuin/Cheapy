@@ -1,6 +1,6 @@
 # Cheapy simulation settings.
 #
-# These four weights/assumptions are everything the router lets you dial. They apply to
+# These five weights/assumptions are everything the router lets you dial. They apply to
 # `./run_simul.sh` and to `python src/cheapy/cli.py` alike. Every value here can be
 # overridden per-run by the matching command-line flag:
 #
@@ -20,6 +20,15 @@ W_PERFORMANCE: 0.9
 # 0 = ignore the quality prior entirely (pure agreement between models);
 # 3 = the fitted default; larger values approach "trust only the strongest model".
 BETA: 3.0
+
+# Compression on price_score's cheapest/cost ratio: ratio ** PRICE_EXPONENT.
+# 1.0 = no compression (price_score spans the pool's full ~50x price range, which
+# swamps performance_score's much narrower spread in the weighted average -- see
+# docs/FULL_REPORT.md §5/§7). Smaller values pull every non-cheapest score up toward 1.0,
+# narrowing price's spread to roughly the same order as performance's so the weight
+# actually trades the two off. See research/legacy/price_exponent_sweep.py for how this
+# value was picked.
+PRICE_EXPONENT: 0.25
 
 # Fraction of a call's shared prompt prefix assumed to be served from the provider's
 # cache. 1.0 is the optimistic bound (perfect prefix cache, no TTL); 0.0 prices every

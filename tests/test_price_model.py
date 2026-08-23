@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cheapy.models.llm import ModelLLM
 from cheapy.models.trajectory import Trajectory, ViktorEnvironment
-from cheapy.routing.price_model import _next_call_cost, score_price
+from cheapy.routing.price_model import DEFAULT_PRICE_EXPONENT, _next_call_cost, score_price
 
 
 def make_model(name: str, **overrides) -> ModelLLM:
@@ -225,7 +225,13 @@ class TestNextCallCost(unittest.TestCase):
 
 
 class TestScorePrice(unittest.TestCase):
-    """Exercises `score_price`'s ratio-to-cheapest scoring across a candidate pool."""
+    """Exercises `score_price`'s ratio-to-cheapest scoring across a candidate pool.
+
+    All of these pin `price_exponent=1.0` explicitly, so they test the base
+    ratio-to-cheapest arithmetic on its own, independent of whatever
+    `DEFAULT_PRICE_EXPONENT` currently is -- see `TestPriceExponent` below for the
+    compression behavior itself.
+    """
 
     def test_hold_outscores_equally_priced_switch(self):
         # model-a (hold) costs 0.00396, model-b (switch) costs 0.0072 -- see
@@ -242,7 +248,7 @@ class TestScorePrice(unittest.TestCase):
         )
         models = [make_model("model-a"), make_model("model-b")]
 
-        score_price(trajectory, models)
+        score_price(trajectory, models, price_exponent=1.0)
 
         by_name = {m.name: m.price_score for m in models}
         self.assertEqual(by_name["model-a"], 1.0)
@@ -254,7 +260,7 @@ class TestScorePrice(unittest.TestCase):
         )
         models = [make_model("model-a"), make_model("model-b")]
 
-        score_price(trajectory, models)
+        score_price(trajectory, models, price_exponent=1.0)
 
         self.assertEqual(models[0].price_score, 1.0)
         self.assertEqual(models[1].price_score, 1.0)
@@ -277,7 +283,7 @@ class TestScorePrice(unittest.TestCase):
             make_model("tiny", context_window_size=1_000),  # switching, clamped
         ]
 
-        score_price(trajectory, models)
+        score_price(trajectory, models, price_exponent=1.0)
 
         by_name = {m.name: m.price_score for m in models}
         # model-a (hold): cached=min(1800,3000)=1800, uncached=(3000-1800)+600=1800
@@ -290,6 +296,82 @@ class TestScorePrice(unittest.TestCase):
         self.assertAlmostEqual(by_name["tiny"], 1.0)  # cheapest: least to bill
         self.assertAlmostEqual(by_name["model-a"], 80 / 99)
         self.assertAlmostEqual(by_name["model-b"], 4 / 9)
+
+
+class TestPriceExponent(unittest.TestCase):
+    """Exercises the `price_exponent` compression itself."""
+
+    def test_exponent_one_reproduces_the_plain_ratio(self):
+        trajectory = make_trajectory(
+            served_model="model-a",
+            total_calls=5,
+            last_call_input_tokens=3_000,
+            total_cached_tokens=1_800,
+        )
+        models = [make_model("model-a"), make_model("model-b")]
+
+        score_price(trajectory, models, price_exponent=1.0)
+
+        self.assertAlmostEqual(models[1].price_score, 0.55)
+
+    def test_smaller_exponent_pulls_non_cheapest_scores_toward_one(self):
+        # Same pool as the plain-ratio test above (model-b's raw ratio is 0.55); a
+        # smaller exponent must move it strictly closer to 1.0, since x**p > x for
+        # 0 < x < 1 and 0 < p < 1.
+        trajectory = make_trajectory(
+            served_model="model-a",
+            total_calls=5,
+            last_call_input_tokens=3_000,
+            total_cached_tokens=1_800,
+        )
+
+        models_p1 = [make_model("model-a"), make_model("model-b")]
+        score_price(trajectory, models_p1, price_exponent=1.0)
+
+        models_p_small = [make_model("model-a"), make_model("model-b")]
+        score_price(trajectory, models_p_small, price_exponent=0.25)
+
+        raw = {m.name: m.price_score for m in models_p1}["model-b"]
+        compressed = {m.name: m.price_score for m in models_p_small}["model-b"]
+        self.assertAlmostEqual(compressed, 0.55**0.25)
+        self.assertGreater(compressed, raw)
+
+    def test_cheapest_candidate_is_unaffected_by_the_exponent(self):
+        # 1.0 ** p == 1.0 for any p: the cheapest candidate's score doesn't move,
+        # whatever compression is applied.
+        trajectory = make_trajectory(
+            served_model="model-a",
+            total_calls=5,
+            last_call_input_tokens=3_000,
+            total_cached_tokens=1_800,
+        )
+        for p in (1.0, 0.5, 0.25, 0.05):
+            models = [make_model("model-a"), make_model("model-b")]
+            score_price(trajectory, models, price_exponent=p)
+            self.assertEqual(models[0].price_score, 1.0)
+
+    def test_default_exponent_narrows_the_pools_full_price_spread(self):
+        # The whole point: a 50x-pricier candidate should no longer score anywhere near
+        # min-max's 0.0, nor even the plain ratio's 0.02 -- it should land within a much
+        # narrower band of the cheapest candidate's 1.0, comparable in order of
+        # magnitude to performance_score's typical spread.
+        trajectory = make_trajectory(
+            served_model="model-a",
+            total_calls=5,
+            last_call_input_tokens=3_000,
+            total_cached_tokens=1_800,
+        )
+        cheap = make_model("cheap", input_price_per_1m=0.2, cached_input_price_per_1m=0.02)
+        pricey = make_model(
+            "pricey", input_price_per_1m=10.0, cached_input_price_per_1m=1.0
+        )  # 50x cheap's rate
+        models = [cheap, pricey]
+
+        score_price(trajectory, models, price_exponent=DEFAULT_PRICE_EXPONENT)
+
+        by_name = {m.name: m.price_score for m in models}
+        self.assertEqual(by_name["cheap"], 1.0)
+        self.assertGreater(by_name["pricey"], 0.3)  # nowhere near the raw ratio's ~0.02
 
 
 if __name__ == "__main__":
