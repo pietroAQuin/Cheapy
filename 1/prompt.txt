@@ -1,0 +1,177 @@
+we want to implement a way to benchmark our implementation against one that only uses fable or one that only uses the model already in use. Lets brainstorm ideas
+
+---
+
+when mocking the performance_model, isnt it smarter to give better models a better score? It most likely is going to happen when the true version is implemented. I also really liked the idea of a graph
+
+---
+
+now resume to implementing. Lets go step by step. Explain what you did
+
+---
+
+can i run it now?
+
+---
+
+where can I see the graph?
+
+---
+
+explain what the graph shows
+
+---
+
+how do I see that the router is better in the graph, because the incumbent-only is a fixed point, fable too. Is there a better way to showcase this?
+
+---
+
+what are going to be the new axis? explain it better
+
+---
+
+what do you say is the avg_performance and and avg_cost?
+
+---
+
+[Image #7] the axis should look like this. Is our router going to curve like that?
+
+---
+
+yes
+
+---
+
+why is random routing and incumbent-only just a dot?
+
+---
+
+lets change it completely. I want a bar graph that shows the total cost for each policy using the dataset we have. SOmething like this image [Image #8]
+
+---
+
+only keep this new png
+
+---
+
+so the organizers want a graph that looked like the old one?
+
+---
+
+lets make the graph with the mock as it is. We need a frontier graph. The x axis is the cost per task not the avarege, and y axis the mocked quality. This means that the point in the graph are the actual results we had with each trajectory. also make this line for the random choice and mantaining the same model. Forget fable for now.
+
+---
+
+is there any ideas on how to draw a line so it looks like the image given? lets discuss
+
+---
+
+if you could ask the organizers a question so that the way of making the graph becomes more clear, what would you ask?
+
+---
+
+the answer: The frontier plot is mostly an evaluation artifact, not a charting exercise. What makes it credible:
+
+Axes & units
+x = cost per trajectory (cache-aware, estimated tokens — state your token estimator), y = your quality proxy. Caption exactly how both are computed.
+Use per-trajectory means (or per 1k); don't mix totals and means.
+
+Anchors first
+Always-cheapest, always-strongest, the observed policy, and random routing at matched cost. Your curve only means something relative to those four.
+
+Sweep, don't cherry-pick
+Generate the curve by sweeping one knob (escalation threshold / budget), not by tuning a new model per point. Keep Pareto-dominant points, show dominated ones faintly so the sweep is visible.
+
+Uncertainty is the whole game
+Off-policy estimates need CIs: bootstrap over trajectories, draw bands not bare lines. A frontier without error bands reads as overfit.
+Show effective sample size / overlap where weights blow up; mark thin-support regions as unreliable instead of extrapolating through them.
+
+Details judges notice
+Held-out split for the headline curve; label train vs held-out.
+A sensitivity variant (±30% on cache-hit rate or price assumptions) as a second faint frontier shows your ranking is robust.
+Annotate 2–3 named operating points ("60% of strongest-model cost, 97% of its quality") — that's the line people remember.
+
+One clean chart: light grid, direct labels instead of a legend, no dual y-axes.
+
+---
+
+why do we choose to make the points changing the importance of price? is there any other way to do it? if in doubt I can ask the organizers
+
+---
+
+Both are valid sweeps — they're just different knobs, and which one you can defend depends on your data.
+
+Per-call threshold (no cascade)
+
+You score each trajectory with a "needs the strong model" signal (difficulty proxy, classifier probability, tool presence, length) and route if the score exceeds τ. Sweeping τ from 0→1 traces the frontier: τ=1 is always-cheapest, τ=0 is always-strongest. This is the cheapest to evaluate honestly, because each trajectory gets exactly one model and your off-policy estimate is a straightforward reweighting.
+
+Budget-constrained routing
+
+Same scores, but instead of a threshold you allocate the top-k highest-benefit trajectories to the strong model until a cost cap is hit. Sweeping the cap gives the frontier. Slightly stronger story (it's explicitly an allocation problem — spend where marginal quality per euro is highest), but it's a batch/oracle policy unless you show an online version with a threshold calibrated to hit the budget in expectation.
+
+True cascade
+
+Run cheap first, escalate on a signal from its own output (self-reported confidence, verifier, retry heuristics). Sweeping the escalation threshold gives the frontier. This is the most interesting policy and the hardest to justify on trajectories_v1: there are no outputs and no usage in the data, so you cannot observe what the cheap model would have produced or whether it would have triggered escalation. You'd be simulating a signal you never measured — and you must charge the cascade for both calls, plus the cache reset on the switch, or the numbers are fiction.
+
+Practical read: make (1) or (2) your headline frontier, since the traces actually support them. If you want the cascade, present it as a clearly labeled modeled extension with explicit assumptions (escalation rate, cheap-call cost always paid, cache penalty) and a sensitivity band. Judges reward the honesty far more than the extra sophistication.
+Whichever you pick, say in the caption what the knob is and that a single knob generated every point — that's what separates a sweep from cherry-picked runs.
+
+---
+
+explain what you did like i am five
+
+---
+
+so the graph isnt finished yet? i wanted it to look like this [Image #11]
+
+---
+
+we dont need the "be here" and "your router" and "always the frontier model" text. fix it and tell me how you calculated the curve. what is this point in the middle of the curve.
+
+---
+
+change the label of the observed policy to "hold policy"
+
+---
+
+this label stays behind the line, make it visible
+
+---
+
+explain what the threshold sweep actually is
+
+---
+
+this basically chooses between the weakest or strongest models?
+
+---
+
+delete everything related to it, lets keep only the main router
+
+---
+
+the way we graph it is by changing the pricing weight?
+
+---
+
+is this the best way to benchmark it?
+
+---
+
+ok, now explain what a bootstrap CI is and how to do it
+
+---
+
+yes add it
+
+---
+
+what is the sensitivity variant?
+
+---
+
+how was the other way we did the benchmark, with the treshhold?
+
+---
+
+our implementation is going to tell how well a model scores in specific tasks and assign it to similar tasks. If models that are cheaper perform just as well as expensive ones they are going to be chosen. Do you have ideas on how to benchmark it when we implement it this way?
