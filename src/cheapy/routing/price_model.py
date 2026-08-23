@@ -115,20 +115,44 @@ def estimate_costs(trajectory: Trajectory, models: list[ModelLLM]) -> dict[str, 
     return {model.name: _next_call_cost(trajectory, model) for model in models}
 
 
-def score_price(trajectory: Trajectory, models: list[ModelLLM]) -> list[ModelLLM]:
+#: Compression applied to the cheapest/cost ratio before it becomes `price_score` --
+#: see `score_price`. `1.0` reproduces the plain ratio (no compression). Chosen the same
+#: way `performance_model.DEFAULT_BETA` was: measured, not asserted -- see
+#: `research/legacy/price_exponent_sweep.py` and docs/FULL_REPORT.md §5/§7 for the sweep
+#: this value came out of.
+DEFAULT_PRICE_EXPONENT = 0.25
+
+
+def score_price(
+    trajectory: Trajectory, models: list[ModelLLM], price_exponent: float = DEFAULT_PRICE_EXPONENT
+) -> list[ModelLLM]:
     """Enrich each `ModelLLM` in `models` with a `price_score` in `(0, 1]`.
 
     Higher is cheaper. Costs are estimated per `_next_call_cost` (via `estimate_costs`)
     and scored as a ratio to the *cheapest* candidate in this trajectory's candidate
     pool — per docs/FULL_REPORT.md §5's "normalize within the candidate pool, not globally" — rather
     than min-max stretched across the pool's full price range. A candidate priced at `k`
-    times the cheapest one scores `1/k`: a candidate only marginally above the cheapest
-    price lands close to `1.0`, not at the same `0.0` floor a wildly pricier candidate
-    would get under min-max. It also depends only on the cheapest cost, not the
-    priciest, so a candidate's score no longer shifts just because some unrelated,
-    pricier (or cheaper) candidate joins the pool. Every candidate gets a real cost (a
-    too-small context window is compacted to fit, never excluded — see
+    times the cheapest one scores `(1/k) ** price_exponent`: a candidate only marginally
+    above the cheapest price lands close to `1.0`, not at the same `0.0` floor a wildly
+    pricier candidate would get under min-max. It also depends only on the cheapest
+    cost, not the priciest, so a candidate's score no longer shifts just because some
+    unrelated, pricier (or cheaper) candidate joins the pool. Every candidate gets a
+    real cost (a too-small context window is compacted to fit, never excluded — see
     `_next_call_cost`), so every model in the pool gets a ratio-based score.
+
+    `price_exponent` compresses that ratio's dynamic range before it is used.
+    `price_score`'s raw ratio-to-cheapest can span the pool's full price spread (this
+    project's 9 candidates: 1.0 down to 0.02, a 50x range), while `performance_score`
+    is designed to compress toward the top whenever candidates broadly agree (docs/FULL_REPORT.md
+    §6) -- nothing below ~0.80 on settled steps, ~0.17 spread even on contested ones. In
+    a linear weighted average, whichever score has the wider numeric spread dominates
+    almost regardless of the weight given to it (docs/FULL_REPORT.md §7's "price saturates at
+    w_cost = 0.15"). Raising the ratio to `price_exponent < 1` pulls every sub-1.0 score
+    up toward `1.0` -- the cheapest candidate is unaffected (`1.0 ** p == 1.0` for any
+    `p`) -- narrowing price_score's spread to roughly the same order of magnitude as
+    performance_score's, so the weight actually trades the two off across more of its
+    range instead of one term swamping the other by construction. `price_exponent = 1.0`
+    reproduces the plain ratio; this is a strict generalization, not a different formula.
     """
     costs = estimate_costs(trajectory, models)
     cheapest = min(costs.values())
@@ -136,7 +160,8 @@ def score_price(trajectory: Trajectory, models: list[ModelLLM]) -> list[ModelLLM
     for model in models:
         cost = costs[model.name]
         # cost == 0 only when cheapest == 0 too (costs are never negative), so this is
-        # the tie-at-the-top case, not a magic number -- 0/0 is otherwise undefined.
-        model.price_score = 1.0 if cost == 0 else cheapest / cost
+        # the tie-at-the-top case, not a magic number -- 0/0 is otherwise undefined, and
+        # 1.0 to any power is still 1.0 so price_exponent doesn't need special-casing here.
+        model.price_score = 1.0 if cost == 0 else (cheapest / cost) ** price_exponent
 
     return models

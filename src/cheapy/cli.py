@@ -131,6 +131,7 @@ def simulate(
             w_cost=config.w_cost,
             w_performance=config.w_performance,
             beta=config.beta,
+            price_exponent=config.price_exponent,
             min_gain=min_gain,
         )
         result = (decision, trajectory, chunk_name)
@@ -260,6 +261,13 @@ def main(argv: list[str] | None = None) -> int:
         help="conformity weighting of the capability model, w_i = prior_i ** beta [BETA]",
     )
     parser.add_argument(
+        "--price-exponent",
+        type=float,
+        default=None,
+        help="compression on price_score's cheapest/cost ratio, ratio ** price_exponent; "
+        "1.0 = no compression [PRICE_EXPONENT]",
+    )
+    parser.add_argument(
         "--cache-hit-rate",
         type=float,
         default=None,
@@ -296,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
             w_cost=args.w_cost,
             w_performance=args.w_performance,
             beta=args.beta,
+            price_exponent=args.price_exponent,
             cache_hit_rate=args.cache_hit_rate,
             verbose=args.verbose,
         ).validate()
@@ -304,8 +313,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"weights: cost {config.w_cost} / performance {config.w_performance}   "
-        f"beta {config.beta}   cache-hit-rate {config.cache_hit_rate}   "
-        f"min-gain {args.min_gain}"
+        f"beta {config.beta}   price-exponent {config.price_exponent}   "
+        f"cache-hit-rate {config.cache_hit_rate}   min-gain {args.min_gain}"
     )
 
     on_result = None

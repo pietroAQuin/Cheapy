@@ -33,6 +33,11 @@ DEFAULT_W_PERFORMANCE = 0.5
 #: config file never depends on import order between the two modules.
 DEFAULT_BETA = 3.0
 
+#: Compression on price_score's cheapest/cost ratio (`ratio ** PRICE_EXPONENT`). Mirrors
+#: `cheapy.routing.price_model.DEFAULT_PRICE_EXPONENT`, kept as a literal for the same
+#: import-order reason as DEFAULT_BETA above.
+DEFAULT_PRICE_EXPONENT = 0.25
+
 #: Optimistic prefix-cache bound — see `cheapy/preprocessing/trajectory_analyzer.py`.
 DEFAULT_CACHE_HIT_RATE = 1.0
 
@@ -44,6 +49,7 @@ _KEYS = {
     "W_COST": "w_cost",
     "W_PERFORMANCE": "w_performance",
     "BETA": "beta",
+    "PRICE_EXPONENT": "price_exponent",
     "CACHE_HIT_RATE": "cache_hit_rate",
     "VERBOSE": "verbose",
 }
@@ -58,6 +64,7 @@ class SimulationConfig:
     w_cost: float = DEFAULT_W_COST
     w_performance: float = DEFAULT_W_PERFORMANCE
     beta: float = DEFAULT_BETA
+    price_exponent: float = DEFAULT_PRICE_EXPONENT
     cache_hit_rate: float = DEFAULT_CACHE_HIT_RATE
     verbose: bool = DEFAULT_VERBOSE
 
@@ -84,6 +91,8 @@ class SimulationConfig:
             raise ValueError("W_COST + W_PERFORMANCE must be > 0 (they are normalized by their sum)")
         if self.beta < 0:
             raise ValueError(f"BETA must be >= 0, got {self.beta}")
+        if self.price_exponent <= 0:
+            raise ValueError(f"PRICE_EXPONENT must be > 0, got {self.price_exponent}")
         if not 0.0 <= self.cache_hit_rate <= 1.0:
             raise ValueError(f"CACHE_HIT_RATE must be in [0, 1], got {self.cache_hit_rate}")
         return self

@@ -29,7 +29,7 @@ from typing import Literal
 from cheapy.models.llm import ModelLLM
 from cheapy.models.trajectory import Trajectory
 from cheapy.routing.performance_model import DEFAULT_BETA, score_performance
-from cheapy.routing.price_model import score_price
+from cheapy.routing.price_model import DEFAULT_PRICE_EXPONENT, score_price
 
 __all__ = ["ScoreRow", "RoutingDecision", "aggregate_scores", "rank", "decide", "route"]
 
@@ -199,6 +199,7 @@ def route(
     w_cost: float,
     w_performance: float,
     beta: float = DEFAULT_BETA,
+    price_exponent: float = DEFAULT_PRICE_EXPONENT,
     min_gain: float = 0.0,
 ) -> RoutingDecision:
     """The whole scoring chain for one trajectory, in docs/FULL_REPORT.md §2's order.
@@ -207,7 +208,7 @@ def route(
     in place. `models` must be this trajectory's own list: the stages mutate the objects,
     so a list shared between trajectories would carry the previous one's scores.
     """
-    score_price(trajectory, models)
+    score_price(trajectory, models, price_exponent=price_exponent)
     score_performance(trajectory, models, beta=beta)
     aggregate_scores(models, w_cost=w_cost, w_performance=w_performance)
     return decide(trajectory, models, min_gain=min_gain)
