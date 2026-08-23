@@ -1,1 +1,9 @@
 In the app folder, populate the main.py file so that it runs the entire application process: i) iterate through the jsonl trajectories saved in the data directory and ingest with trajectory_analyzer.py, saving all in a list of trajectories ii) create model list with model_list.py iii) iterate through the trajectory list, getting for each model in the model list a price_score, a performance_score, and finally a score for that trajectory (in other words, trajectory gets analyzed first through cost, then performance, and then the weighted average of both on model.py) iv) model.py returns a list of the models, ordered by score. If top model is the same as the one of the trajectory, classify trajectory as HOLD, otherwise as CHANGE TO X. For now, implement only until stage ii). Stage i) should also place a csv in data called test_run_start_{current_date}, whereas the final stage add a test_run_end_{current_date}.
+
+---
+
+Ok, capability_model is done and returns a score from 0-1. Finalize the app so that it runs a model routing simulation for wherever jsonl is on data. No need to generate csvs in between, so drop the csvs generated at the start - kepp only those generated at the end, as routing_simul.csv. For quality of life: make a small sh file we can use to run a simul. At the end, alongside exporting the resulting csv, it should also print on the terminal a small overview, indicating how many trajectories got HOLD and how many got CHANGE TO, also indicating to which model we CHANGE TO the most.
+
+---
+
+Wait, price_model.py is already implemented in another branch. Simply assume it also has the score_price method for scoring models of a model list. No need to implement that from scratch. Use the given implementation for capability_model.py, and then finish the model.py, which based of a weighting criteria for each sub-score, defines the final score.
