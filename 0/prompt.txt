@@ -1,0 +1,15 @@
+Cheapy is done, and all its models are now populated. Nevertheless, the codebase grew imensily since its first phase, and turned into a collection of multiple separated directories which are hard to understand and who are not grouped correctly. Furthermore, is not easy to understand how to use Cheapy coming from the CLI, neither how to configure modelling variables, whereas documentation is also ucnlear. For that, lets implement the following changes: i) Suggest a new project structure, that condenses the front-facing directory structure into the most general categories possible. Present an example structure before implementing. ii) On the root there should be a single, extremely short README.md file focused on stating how to ue Cheapy on the CLI and running a simulation on a given JSONL. The file still opens with what Cheapy is and what it does, but keep this part extremely short and high-level. Front facing README.md shouldn't go above 800 words. iii) On the root there should also be a yaml configuration file that sets the following simulation variables: W_COST, W_CAPABILITY, BETA, CACHE_HIT_RATE. Those should be the variables used once I run a simulation using the .sh file or one from the command line. iv) Restructure documentation: move the current README.md file into a docs directory, and rename it to FULL_REPORT.md.
+
+---
+
+Rewrite the core level .md so that it answers this questions here: # <Team name> — Viktor Challenge submission
+Members: ...
+Objective: <the trade-off we optimized and why>
+Routing signal: <the structure in the traces our router uses>
+Headline result (held-out, cache-aware): <e.g. −41% cost at ≥95% kept outcome>
+Off-policy method: <matching / weighting / judge model> — weakest point: <named failure mode>
+Reproduce: <exact commands, from a clean checkout, dataset path as argument>.
+
+---
+
+Bring the readme back to 800 words
