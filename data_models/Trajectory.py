@@ -264,6 +264,19 @@ class Trajectory(BaseModel):
         ),
     )
 
+    last_call_input_tokens: int = Field(
+        ge=0,
+        description=(
+            "ESTIMATE (chars/4). Size of the most recently recovered call's full prompt "
+            "(tool schemas + history up to that point) — not a sum across calls. Since "
+            "every call resends the whole history to date, this is the best available "
+            "proxy for the size of the *next* call's prompt. Deliberately distinct from "
+            "`total_tokens`, which sums every past call's own (already-superseded) "
+            "full-history snapshot and so overstates next-call size, often by a wide "
+            "margin on long trajectories. 0 if the trajectory has no recovered calls."
+        ),
+    )
+
     total_tool_calls: int = Field(ge=0, description="`function_call` items in the history.")
 
     total_images_received: int = Field(
