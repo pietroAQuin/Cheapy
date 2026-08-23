@@ -49,25 +49,30 @@ DEFAULT_WEIGHT = 0.1  # w_cost for the router's single fixed operating point (w_
 # to price_score's near-unit range, so the router's behavior barely changes past
 # w_cost~0.15 -- 0.1 sits in the part of that range where it still meaningfully listens
 # to performance_score while beating the incumbent-only baseline on cost, rather than
-# collapsing to the same picks as always-cheapest (w=1.0) or drifting into "quality-only"
-# territory that can cost more than doing nothing (w<0.05).
+# collapsing to the same picks as always-cheapest (w_cost=1.0) or drifting into
+# "quality-only" territory that can cost more than doing nothing (w_cost<0.05).
 
 
-def find_export(arg: str | None) -> Path:
-    """Resolve the trajectories file/dir. Prefers `export/*.jsonl` (docs/FULL_REPORT.md §3);
-    falls back to `data/*.jsonl` for the README's originally-documented path."""
+def find_export(arg: str | None) -> list[Path]:
+    """Resolve the trajectories file(s). Prefers `export/*.jsonl` (docs/FULL_REPORT.md
+    §3); falls back to `data/*.jsonl` for the README's originally-documented path.
+
+    Returns every `*.jsonl` chunk in the resolved directory, sorted -- not just the
+    first one. A single file arg is returned as a one-element list either way, so
+    callers always iterate a list.
+    """
     if arg:
         path = Path(arg)
         if path.is_file():
-            return path
+            return [path]
         candidates = sorted(path.glob("*.jsonl"))
         if candidates:
-            return candidates[0]
+            return candidates
         sys.exit(f"no *.jsonl found in {path}")
     for directory in (Path("export"), Path("data")):
         candidates = sorted(directory.glob("*.jsonl"))
         if candidates:
-            return candidates[0]
+            return candidates
     sys.exit("no export found — pass a path, or place a chunk under export/ or data/")
 
 
@@ -110,17 +115,28 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="only score the first N trajectories")
     args = parser.parse_args()
 
-    export_path = find_export(args.export)
+    chunks = find_export(args.export)
     base_models = build_model_list()
-    print(f"reading {export_path} ...")
+    print(f"reading {', '.join(c.name for c in chunks)} ...")
 
+    # One id counter across every chunk, not per-file: analyze_file/analyze() number a
+    # trajectory by its line position within a single file, so reading two chunks
+    # independently would hand out id 0-999 twice and silently collide the moment a
+    # second chunk (e.g. trajectories_v1_02.jsonl) lands next to the first. Re-number
+    # here instead, same fix cli.py's iter_trajectories already applies.
     results = []
-    for i, trajectory in enumerate(analyze_file(export_path)):
-        if args.limit and i >= args.limit:
+    count = 0
+    for chunk in chunks:
+        for trajectory in analyze_file(chunk):
+            if args.limit and count >= args.limit:
+                break
+            trajectory.id = count
+            results.append(score_trajectory(trajectory, base_models))
+            count += 1
+            if count % 200 == 0:
+                print(f"  scored {count} trajectories...")
+        if args.limit and count >= args.limit:
             break
-        results.append(score_trajectory(trajectory, base_models))
-        if (i + 1) % 200 == 0:
-            print(f"  scored {i + 1} trajectories...")
 
     n = len(results)
     print(f"scored {n} trajectories\n")
@@ -187,7 +203,7 @@ def plot_total_cost(path: Path, results: list[dict]) -> None:
         ("always-\ncheapest", sum(r["cheapest_cost"] for r in results), "#FFFFFF", "#150079"),
         ("always-\nstrongest", sum(r["strongest_cost"] for r in results), "#FFBD9E", "#150079"),
         ("always\nhold", sum(r["incumbent_cost"] for r in results), "#150079", "#150079"),
-        (f"router\n(w={DEFAULT_WEIGHT})", sum(r["router_cost"] for r in results), "#6748FD", "#6748FD"),
+        (f"router\n(w_cost={DEFAULT_WEIGHT})", sum(r["router_cost"] for r in results), "#6748FD", "#6748FD"),
     ]
     bars.sort(key=lambda b: b[1])
 
