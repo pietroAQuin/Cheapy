@@ -1,8 +1,8 @@
-"""pre_processing/trajectory_analyzer.py: normalization, call recovery, and analyze()."""
+"""src/cheapy/preprocessing/trajectory_analyzer.py: normalization, call recovery, and analyze()."""
 import json
 
-from data_models.Trajectory import ItemKind, Tool, Trajectory, ViktorEnvironment
-from pre_processing import trajectory_analyzer as ta
+from cheapy.models.trajectory import ItemKind, Tool, Trajectory, ViktorEnvironment
+from cheapy.preprocessing import trajectory_analyzer as ta
 from tests.conftest import (
     claude_function_call,
     claude_function_call_output,

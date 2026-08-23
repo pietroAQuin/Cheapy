@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import inspect
 
-from analysis.complexity_model.features import FEATURE_NAMES, extract_step_features
-from pre_processing.trajectory_analyzer import analyze
+from cheapy.capability.features import FEATURE_NAMES, extract_step_features
+from cheapy.preprocessing.trajectory_analyzer import analyze
 
 
 class TestNoServedModelLeakage:
-    """README §4's five leakage features must not be readable from the feature vector."""
+    """docs/FULL_REPORT.md §4's five leakage features must not be readable from the feature vector."""
 
     def test_source_never_reads_served_model(self):
         source = inspect.getsource(extract_step_features)

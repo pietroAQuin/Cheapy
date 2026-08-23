@@ -1,8 +1,8 @@
-"""pre_processing/model_list.py: the static candidate-pool builder."""
+"""src/cheapy/preprocessing/model_list.py: the static candidate-pool builder."""
 import pytest
 
-from data_models.model_llm import ModelLLM
-from pre_processing.model_list import (
+from cheapy.models.llm import ModelLLM
+from cheapy.preprocessing.model_list import (
     _MODEL_FAMILIES,
     build_model_list,
     context_window_for,

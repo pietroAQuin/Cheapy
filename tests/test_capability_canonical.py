@@ -4,7 +4,7 @@ assistant turns) must be handled identically regardless of which encoding produc
 """
 from __future__ import annotations
 
-from analysis.complexity_model.canonical import (
+from research.capability_fitting.canonical import (
     Message,
     Role,
     ToolCall,

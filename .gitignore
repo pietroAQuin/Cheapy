@@ -1,4 +1,4 @@
-# Dataset — challenge use only, no redistribution (see export/LICENSE)
+# Dataset — challenge use only, no redistribution (see data/LICENSE)
 export/
 *.jsonl.tar.gz
 *.jsonl
@@ -17,7 +17,7 @@ venv/
 .tokenizer_cache/
 
 # Elicitation store: raw provider responses, derived from the export
-analysis/complexity_model/store/
+research/capability_fitting/store/
 
 # Real API keys — see .env.example
 .env

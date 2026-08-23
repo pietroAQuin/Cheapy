@@ -1,7 +1,7 @@
-# Only needed to run the offline elicitation pipeline (analysis/complexity_model/
-# run_pilot.py, test_single_request.py), never by the shipped router. Kept separate from
-# requirements-dev.txt so capability_model.py's "no API keys required" guarantee has no
-# accidental SDK dependency.
+# Only needed to re-run the offline elicitation pipeline
+# (research/capability_fitting/run_pilot.py, test_single_request.py), never by the
+# shipped router. Kept separate from requirements-dev.txt so the capability model's
+# "no API keys required" guarantee has no accidental SDK dependency.
 anthropic
 openai
 python-dotenv

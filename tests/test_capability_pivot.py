@@ -5,12 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from analysis.complexity_model.calibration import estimate_delta
-from analysis.complexity_model.canonical import ToolDef
-from analysis.complexity_model.completion import nystrom_complete
-from analysis.complexity_model.logged_action import action_run_at, logged_action_for
-from analysis.complexity_model.parser import classify_run
-from analysis.complexity_model.scoring import ActionType
+from research.capability_fitting.calibration import estimate_delta
+from research.capability_fitting.canonical import ToolDef
+from cheapy.capability.completion import nystrom_complete
+from research.capability_fitting.logged_action import action_run_at, logged_action_for
+from research.capability_fitting.parser import classify_run
+from research.capability_fitting.scoring import ActionType
 
 BASH = ToolDef(name="bash", description="", parameters={
     "type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]})
