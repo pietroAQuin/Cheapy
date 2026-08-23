@@ -47,3 +47,11 @@ cant we use this same logic to plot how much our router would spend on each traj
 ---
 
 yes, if i think it looks bad you just reverse it
+
+---
+
+i guess it is best if we only keep the bar chart. what would our main weakness be then?
+
+---
+
+i want to push just the script necessary to do the bar graph, the other graphs are not going to be used.
