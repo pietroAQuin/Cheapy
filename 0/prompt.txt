@@ -146,3 +146,7 @@ now with wiehgt cost = 0.1  and price exponent = 0.3
 ---
 
 now with price exponent = 0.2
+
+---
+
+okay so set it to 0.25 commit and push it. int the commit feature state it to reweighting variables
