@@ -15,3 +15,9 @@ venv/
 
 # Tokenizer vocab, fetched once (3.6 MB)
 .tokenizer_cache/
+
+# Elicitation store: raw provider responses, derived from the export
+analysis/complexity_model/store/
+
+# Real API keys — see .env.example
+.env
