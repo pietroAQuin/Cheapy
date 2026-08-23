@@ -139,7 +139,7 @@ carry the previous trajectory's scores. `src/cheapy/cli.py` rebuilds it per line
 | `research/capability_fitting/` | Offline elicitation + fitting pipeline that produced `pair_model.json`. Runs once, needs API keys, not on the router's path |
 | `research/data_exploration/` | Colab notebook clustering toolsets and complexity bands — exploratory (see `docs/data_exploration.md`) |
 | `research/legacy/` | **Legacy.** First-pass loader and cost model from before `src/cheapy/preprocessing/` existed; they use chars/4 tokens and the since-disproved trajectory-grouping assumption (§4). Kept for reference; nothing imports them |
-| `tests/` | 168 unit tests over hand-built fixtures, never the export |
+| `tests/` | 172 unit tests over hand-built fixtures, never the export |
 | `docs/` | This report, the capability-model spec, the data-exploration notes, and the organizers' briefing (`docs/hackathon/`) |
 | `data/` | The redacted export — gitignored, challenge use only (`data/LICENSE`) |
 
@@ -157,20 +157,21 @@ that is what keeps the capability model's "no API keys required" guarantee hones
 | `W_COST` | `0.5` | Weight on `price_score` in the final score (§5, "Aggregation") |
 | `W_PERFORMANCE` | `0.5` | Weight on `performance_score` |
 | `BETA` | `3.0` | Conformity weighting of the capability model, `w_i = prior_i ** BETA` (§6) |
+| `PRICE_EXPONENT` | `0.25` | Compression on `price_score`'s cheapest/cost ratio, `ratio ** PRICE_EXPONENT` (§5, "The formula") |
 | `CACHE_HIT_RATE` | `1.0` | Assumed prefix-cache hit fraction; drives the cost estimate (§5, "Price") |
 | `VERBOSE` | `false` | Print every trajectory's full scoreboard, not just the run summary |
 
-Each has a matching flag (`--w-cost`, `--w-performance`, `--beta`, `--cache-hit-rate`,
-`--verbose` / `--quiet`) that wins for a single run. Precedence: **flag > `cheapy.yaml` >
-built-in default**. `src/cheapy/config.py` is the only module that reads the file — the scoring
-stages still take every knob as a call argument, so nothing under `routing/` or `capability/`
-depends on a config file existing, and the tests never load one.
+Each has a matching flag (`--w-cost`, `--w-performance`, `--beta`, `--price-exponent`,
+`--cache-hit-rate`, `--verbose` / `--quiet`) that wins for a single run. Precedence: **flag >
+`cheapy.yaml` > built-in default**. `src/cheapy/config.py` is the only module that reads the
+file — the scoring stages still take every knob as a call argument, so nothing under `routing/` or
+`capability/` depends on a config file existing, and the tests never load one.
 
 ### Running it
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest                  # 168 passed
+.venv/bin/python -m pytest                  # 172 passed
 ./run_simul.sh                              # data/, ~17 s over the 1,000-line chunk
 ./run_simul.sh path/to/export.jsonl         # any dataset; CSV written beside it
 ./run_simul.sh --limit 5 --verbose          # per-trajectory scoreboards
@@ -361,19 +362,36 @@ wrong.
 
 #### The formula (`src/cheapy/routing/price_model.py`)
 
-`score_price(trajectory, models)` estimates the USD cost of each candidate serving the
-trajectory's **next call**, then scores each cost as a *ratio to the cheapest candidate* in the
-pool for this trajectory: `price_score ∈ (0, 1]`, cheapest → `1.0`, and a candidate priced at `k`
-times the cheapest one → `1/k`. This is deliberately not min-max normalization (`(max_cost −
-cost) / (max_cost − min_cost)`): min-max forces the priciest candidate to exactly `0.0` and the
-cheapest to exactly `1.0` regardless of how close their actual costs are, so a candidate only
-1% pricier than the cheapest gets the same `0.0` floor as one 100× pricier, and every candidate's
-score shifts whenever an unrelated candidate's price changes the pool's max. Ratio-to-cheapest
-scores each candidate from its own cost and the pool's cheapest cost only, so a marginally pricier
-candidate gets a proportionally mild penalty and an unrelated candidate joining the pool doesn't
-move anyone else's score. It reads only `Trajectory` fields plus one `ModelLLM` at a time — the
-only place it looks at `trajectory.served_model` is the hold/switch cache check below, which is
-the exception the shared contract above carves out.
+`score_price(trajectory, models, price_exponent=DEFAULT_PRICE_EXPONENT)` estimates the USD cost of
+each candidate serving the trajectory's **next call**, then scores each cost as a *ratio to the
+cheapest candidate* in the pool for this trajectory, raised to `price_exponent`:
+`price_score = (cheapest_cost / cost) ** price_exponent ∈ (0, 1]`, cheapest → `1.0` for any
+exponent (`1.0 ** p == 1.0`), and a candidate priced at `k` times the cheapest one → `(1/k) **
+price_exponent`. This is deliberately not min-max normalization (`(max_cost − cost) / (max_cost −
+min_cost)`): min-max forces the priciest candidate to exactly `0.0` and the cheapest to exactly
+`1.0` regardless of how close their actual costs are, so a candidate only 1% pricier than the
+cheapest gets the same `0.0` floor as one 100× pricier, and every candidate's score shifts whenever
+an unrelated candidate's price changes the pool's max. Ratio-to-cheapest scores each candidate from
+its own cost and the pool's cheapest cost only, so a marginally pricier candidate gets a
+proportionally mild penalty and an unrelated candidate joining the pool doesn't move anyone else's
+score. It reads only `Trajectory` fields plus one `ModelLLM` at a time — the only place it looks at
+`trajectory.served_model` is the hold/switch cache check below, which is the exception the shared
+contract above carves out.
+
+**Why `price_exponent` exists.** The plain ratio (`price_exponent = 1.0`) still spans the pool's
+full price spread — this project's 9 candidates: `1.0` down to `~0.02`, a 50× range — while
+`performance_score` is designed to compress toward the top whenever candidates broadly agree (§6):
+nothing below `~0.80` on settled steps, `~0.17` spread even on contested ones. In the linear
+weighted average (§5, "Aggregation"), whichever score has the wider numeric spread dominates almost
+regardless of the weight it's given — this is the mechanism behind "price saturates" below.
+`price_exponent < 1.0` raises every sub-`1.0` ratio toward `1.0` (the cheapest candidate is
+unaffected, `1.0 ** p == 1.0` for any `p`), narrowing price_score's spread to roughly the same order
+of magnitude as performance_score's, so the weight actually trades the two off across more of its
+range instead of one term swamping the other by construction. `price_exponent = 1.0` reproduces the
+plain ratio exactly — this is a strict generalization of the formula, not a different one.
+`DEFAULT_PRICE_EXPONENT = 0.25`, set by comparing it against `0.20` and `0.30` on the full export at
+`W_COST = 0.1` (§7) — **not yet a proper grid sweep the way `BETA` was justified (§6)**; treat it as
+a working default, not a tuned optimum (§10, open decisions).
 
 1. **Shape the next call, from `Trajectory` fields alone:**
    - `last_call_input_tokens` — the size of the most recently recovered call's full prompt (tool
@@ -408,9 +426,9 @@ the exception the shared contract above carves out.
      — since neither pricing source discounts a freshly generated output token).
    - `cost = (uncached_tokens · input_price_per_1m + cached_tokens · cached_input_price_per_1m
      + next_output_tokens · output_price_per_1m) / 1e6`.
-4. **Score:** `price_score = cheapest_cost / cost` over the whole candidate pool (`cheapest_cost =
-   min` over every candidate's cost); a candidate tied for cheapest — including the degenerate
-   case where the cheapest cost is `0` — gets `1.0`.
+4. **Score:** `price_score = (cheapest_cost / cost) ** price_exponent` over the whole candidate pool
+   (`cheapest_cost = min` over every candidate's cost); a candidate tied for cheapest — including
+   the degenerate case where the cheapest cost is `0` — gets `1.0`.
 
 This reproduces the cache trap directly: a candidate with identical per-token rates to
 `served_model` scores strictly lower than holding, because a switch loses the cache discount on
@@ -447,6 +465,11 @@ see §3).
   candidate divides by that `0` and lands at exactly `0.0` — a hard floor again, same as min-max,
   rather than a graded ratio. This only triggers when a next call is estimated to cost literally
   nothing, a real but rare corner, not the everyday behavior this formula is designed for.
+- `price_exponent`'s default (`0.25`) is a working value, not a fitted one. It came from comparing
+  three points on the real export (§7), not a grid sweep the way `BETA = 3` was — and the HOLD rate
+  it produces across nearby exponents is not monotonic (`0.20` → 32.1% HOLD, `0.25` → 33.9%, `0.30`
+  → 31.0%), which is a sign three points aren't enough to call this a local optimum rather than
+  sampling noise. A finer sweep is open work (§10).
 
 ### Performance
 
@@ -680,7 +703,7 @@ It appears inside `research/capability_fitting/` only as an explicitly logged di
 ```bash
 ./run_simul.sh                                     # data/, cheapy.yaml settings
 ./run_simul.sh path/to/export.jsonl                # any dataset, CSV written beside it
-./run_simul.sh --w-cost 0.08 --w-performance 0.92  # inside the crossover band
+./run_simul.sh --w-cost 0.15 --w-performance 0.85  # inside the crossover band
 ./run_simul.sh --limit 50 --min-gain 0.02 --beta 1.0
 ./run_simul.sh --limit 5 --verbose                 # the scoreboard behind each verdict
 ```
@@ -695,46 +718,70 @@ CHANGE TO split. ~17 s for the 1,000-line chunk on a laptop, no network. With `V
 Every candidate is scored on every trajectory — the `unscored` column is empty throughout, so all
 nine models compete on all 1,000 lines.
 
-**Weight sweep** (`min_gain = 0`, `β = 3`, all 1,000 trajectories, measured). Cost is
-`price_model.py`'s cache-aware next-call estimate summed over the export, against the observed
-incumbent-only policy ($0.027676 avg/trajectory). "Capability kept" is the mean
-`performance_score` of the routed pick over the incumbent's (0.7512) — **a proxy, not a measured
+**Weight sweep** (`min_gain = 0`, `β = 3`, `PRICE_EXPONENT = 0.25`, all 1,000 trajectories,
+measured). Cost is `price_model.py`'s cache-aware next-call estimate summed over the export,
+against the observed incumbent-only policy ($0.027676 avg/trajectory). "Capability kept" is the
+mean `performance_score` of the routed pick over the incumbent's — **a proxy, not a measured
 outcome; read §8 before quoting it**:
 
 | `w_cost` | HOLD | Cost vs incumbent | Capability kept | Where the changes go |
 |---|---|---|---|---|
 | 0.00 | 137 (13.7%) | +498.7% | 106.8% | `gpt-5.6-sol` 530, `claude-fable-5` 333 |
-| 0.02 | **150 (15.0%)** | +431.4% | 106.7% | `sol` 618, `fable` 225, `luna` 7 |
-| 0.05 | 145 (14.5%) | +271.2% | 105.8% | `sol` 608, `luna` 169, `fable` 78 |
-| 0.08 | 26 (2.6%) | **−25.8%** | 98.7% | `gpt-5.6-luna` 949, `claude-fable-5` 25 |
-| 0.10 | 20 (2.0%) | **−63.1%** | 98.4% | `gpt-5.6-luna` 977, `claude-fable-5` 3 |
-| 0.15 | 20 (2.0%) | −78.2% | 98.3% | `gpt-5.6-luna` 980 |
-| 0.25 – 1.00 | 20 (2.0%) | −78.2% | 98.3% | `gpt-5.6-luna` 980 |
+| 0.02 | 161 (16.1%) | +340.7% | 106.7% | `sol` 785, `fable` 53, `luna` 1 |
+| 0.05 | 184 (18.4%) | +294.1% | 106.7% | `sol` 796, `fable` 11, `luna` 9 |
+| 0.08 | 283 (28.3%) | +205.4% | 106.0% | `sol` 618, `luna` 94, `fable` 5 |
+| 0.10 | **339 (33.9%)** | +150.7% | 105.3% | `sol` 483, `luna` 173, `fable` 5 |
+| 0.15 | 76 (7.6%) | **−61.5%** | 98.8% | `gpt-5.6-luna` 922, `claude-fable-5` 2 |
+| 0.25 | 21 (2.1%) | −78.0% | 98.3% | `gpt-5.6-luna` 979 |
+| 0.50 – 1.00 | 20 (2.0%) | −78.2% | 98.3% | `gpt-5.6-luna` 980 |
 
-Four things to read out of this, and one caution:
+This table replaced an earlier one run at `PRICE_EXPONENT = 1.0` (the plain ratio, no compression —
+see §5, "The formula" for why that compression exists). The `w_cost = 0.00` row is identical
+between the two: at zero weight, `price_score`'s *values* don't matter, only `performance_score`
+does, so this row is an apples-to-apples check that the underlying capability model didn't change.
+Every other row did — cost is a real, remeasured number, not a rescaling of the old one.
 
-1. **The two ends behave as designed.** Pure performance routes to the two highest-prior models
-   (`claude-fable-5`, prior 0.9559) or the panel-central one (`gpt-5.6-sol`) — and costs 6× the
-   incumbent; pure price routes almost everything to `gpt-5.6-luna`, which at $0.20/1M input is
-   50× cheaper than `claude-fable-5` and 25× cheaper than `claude-opus-5`.
-2. **The whole frontier lives in `w_cost` ∈ [0.05, 0.08].** HOLD collapses from 145 to 26 across
-   that step, and cost swings from +271% to −26%. That is the band where the incumbent's cache
-   advantage and its capability standing balance against `luna`'s price advantage. Outside it one
-   term dominates and sweeps the pool, so the interesting operating points are all in there — and
-   the sweep is worth re-running at a finer grid than this one.
-3. **Price saturates at `w_cost = 0.15`.** Every weight from 0.15 to 1.00 gives an identical
-   split: once price outweighs performance, the cheapest model wins every pool and further weight
-   changes nothing.
-4. **Mean capability retention hides the spread.** At `w_cost = 0.10` the *mean* proxy score is
-   98.4% of the incumbent's, but only **37.5%** of individual trajectories get a pick scoring
-   at-or-above their incumbent. The average is carried by trajectories where the pool is flat, not
-   by uniformly safe switching.
+Five things to read out of this, and one caution:
 
-**Caution: 98% "switch to the cheapest model" is not a result to present as a recommendation.**
-It is what an average of a strong price signal and a weak (R² = 1.4%) capability signal
-mechanically produces. The price score separates candidates by orders of magnitude; the performance
-score separates them by ~0.17 on contested steps and less elsewhere. Any honest reading of the
-frontier says so.
+1. **The two ends still behave as designed.** Pure performance routes to the two highest-prior
+   models (`claude-fable-5`, prior 0.9559) or the panel-central one (`gpt-5.6-sol`) — and costs 6×
+   the incumbent; pure price still routes almost everything to `gpt-5.6-luna`, which at $0.20/1M
+   input is 50× cheaper than `claude-fable-5` and 25× cheaper than `claude-opus-5`. Compressing
+   price_score doesn't touch either extreme — it only changes how fast the router moves between
+   them as `w_cost` rises.
+2. **The frontier widened and shifted up.** It now spans roughly `w_cost` ∈ [0.10, 0.25] — HOLD
+   falls from 339 to 21 across that range — versus the old [0.05, 0.08] (145 → 26). A ~5× wider
+   band to dial within is the compression working as intended: before, price's raw spread meant a
+   0.03-wide slice of `w_cost` was the entire usable range; now the same trade-off plays out over a
+   0.15-wide slice, so a given step in `w_cost` changes the outcome more gradually and predictably.
+3. **Price now saturates at `w_cost = 0.25`**, not `0.15`: every weight from `0.25` to `1.00` gives
+   an (almost) identical split. The saturation point itself moved, not just the shape below it —
+   compression buys more weight range before price fully takes over, it doesn't remove the
+   takeover.
+4. **The same `w_cost` now means something different — this is the headline change, not a footnote.**
+   At `w_cost = 0.10`, the *old* formula produced −63.1% cost / 98.4% capability kept / 2.0% HOLD.
+   The *new* formula at the same `w_cost = 0.10` produces **+150.7% cost** / 105.3% capability kept
+   / 33.9% HOLD — the router is now *more* expensive than the incumbent at that weight, because it
+   is no longer blindly chasing the cheapest model. The old headline's cost/capability profile
+   reappears around `w_cost = 0.15` instead (−61.5% / 98.8%), just with a different HOLD rate (7.6%
+   vs. the old 2.0%) — dialing for comparable savings now costs a bit more `w_cost`, not the same
+   amount.
+5. **Per-trajectory retention improved sharply at the low end.** At `w_cost = 0.10`, **85.6%** of
+   individual trajectories now get a pick scoring at-or-above their incumbent (vs. the old
+   formula's 37.5% at the same weight) — the mean capability-kept number is no longer being carried
+   by a handful of flat pools while most trajectories get downgraded. At `w_cost = 0.15` (the point
+   with comparable savings to the old headline) that per-trajectory rate is **43.0%** — still a real
+   improvement over the old 37.5%, but a reminder that the cost-saving and per-trajectory-safety
+   goals pull in different directions along the same dial, exactly as before.
+
+**Caution, unchanged from before:** none of this is validated against ground truth — every
+"capability kept" number is the fitted proxy's own opinion of itself (R² = 1.4%, §6). Read §8
+before treating any of these percentages as a real-world outcome. And at `w_cost ≥ 0.25`, the
+"almost everything to `gpt-5.6-luna`" pattern the old table showed at `w_cost = 0.10` still shows
+up here — the compression narrows the band where it happens, it doesn't remove the underlying
+dynamic (price separates candidates by orders of magnitude, performance by ~0.17 on contested steps
+and less elsewhere), so weights above the saturation point are still not a result to present as a
+recommendation.
 
 Reproduce the cost/retention columns with `research/legacy/benchmark.py` (a single fixed weight,
 plus always-cheapest / always-strongest / random baselines):
@@ -754,11 +801,11 @@ answer is the third of those: a three-model judge panel, elicited offline, reduc
 agreement model (§6).
 
 **What §7's two axes are actually worth.** The cost axis is a deterministic formula over estimated
-tokens — no fitting, no counterfactual, so "−63.1%" is as good as the token estimate and the
+tokens — no fitting, no counterfactual, so "−61.5%" is as good as the token estimate and the
 `CACHE_HIT_RATE` assumption behind it, and no better. The quality axis is *not* a realized
 outcome: it is the mean `performance_score` of the pick, i.e. predicted agreement with a panel of
 three probes, whose own held-out R² is +0.007 to +0.035 and whose measurement noise floor is 0.86.
-Calling it "98% of quality kept" would overstate what was measured; "98% of the proxy the router
+Calling it "99% of quality kept" would overstate what was measured; "99% of the proxy the router
 itself optimizes" is what the number says. Closing that gap — realized quality on held-out
 trajectories — is the open work.
 
@@ -806,6 +853,11 @@ Live list — resolve, then fold the answer into the sections above.
 6. **Whether to vendor the 3.6 MB `o200k_base` vocab.** Today it is fetched once into a gitignored
    `.tokenizer_cache/`, so a fresh clone needs network exactly once; vendoring makes it offline from
    the first run at the cost of a binary blob in git.
+7. **`PRICE_EXPONENT`'s default (`0.25`) needs a proper sweep.** It was picked by comparing three
+   points (`0.20`/`0.25`/`0.30`) on the full export, the same shortcut `BETA` avoided by sweeping a
+   real grid (§6). The three points aren't even monotonic on HOLD rate (§5), which is itself a sign
+   this hasn't been pinned down yet — run the same style of grid `BETA` got before treating `0.25`
+   as anything more than a working default.
 
 **Resolved:** `ModelLLM` and `Trajectory` field sets and the candidate pool (§2); the price scoring
 formula and its assumed price sheet (§5); the performance scoring formula and its fitted artifact
