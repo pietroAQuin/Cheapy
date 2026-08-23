@@ -1,0 +1,69 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M0P802DPN29CBC1EKHER388Q",
+  "session_id": "2be92955-30c6-4bde-9d19-3d70a8230fbe",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-23T02:43:05.204738397Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "README.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "c49f2119a84b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 95312,
+    "cache_read_tokens": 1434244,
+    "output_tokens": 24244,
+    "api_call_count": 25
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-23T02:43:05.116702841Z",
+    "agent_lines": 452,
+    "agent_removed": 535,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 452,
+    "total_lines_changed": 987,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9538,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".codex/hooks.json": 88,
+        ".env.example": 13,
+        "analysis/data_exploration/README.md": 32,
+        "analysis/data_exploration/outputs/q1_tool_families.csv": 9,
+        "analysis/data_exploration/outputs/q1_toolset_profiles.csv": 9,
+        "analysis/data_exploration/outputs/q2_complexity_bands.csv": 6,
+        "analysis/data_exploration/outputs/q3_model_x_complexity.csv": 10,
+        "analysis/data_exploration/outputs/q3_profile_x_complexity_counts.csv": 9,
+        "analysis/data_exploration/outputs/q3_profile_x_complexity_rowpct.csv": 9,
+        "analysis/data_exploration/outputs/q3_toolfamily_x_complexity_pct.csv": 9,
+        "analysis/data_exploration/outputs/q4_env_x_complexity_counts.csv": 3,
+        "analysis/data_exploration/outputs/q4_env_x_complexity_rowpct.csv": 3,
+        "analysis/data_exploration/outputs/q5_density_by_band.csv": 6,
+        "analysis/data_exploration/outputs/q5_density_regimes.csv": 6,
+        "analysis/data_exploration/outputs/q5_partial_correlations.csv": 5,
+        "analysis/data_exploration/outputs/trajectories_labelled.csv": 1001,
+        "analysis/data_exploration/toolset_complexity_analysis.ipynb": 2286,
+        "analysis/data_exploration/toolset_complexity_analysis_executed.ipynb": 5950
+      }
+    }
+  ]
+}
